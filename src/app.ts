@@ -374,6 +374,9 @@ async function openNote(owner: string, repo: string, number: number): Promise<vo
 }
 
 function renderEditor(title: string, body: string): void {
+  cleanupListKeys?.();
+  cleanupListKeys = null;
+
   app.innerHTML = `
     <div class="editor-screen">
       <header>
