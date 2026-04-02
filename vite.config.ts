@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: '/notehub.web/',
+  base: '/pages/training-lmatheson4/notehub.web/',
 });
