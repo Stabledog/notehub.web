@@ -62,6 +62,8 @@ export function createEditor(
     callbacks.onQuit(false);
   });
 
+  Vim.map('jk', '<Esc>', 'insert');
+
   const state = EditorState.create({
     doc: content,
     extensions: [
