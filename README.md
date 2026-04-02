@@ -57,6 +57,10 @@ The `gh-pages` package pushes the contents of `dist/` to the `gh-pages` branch. 
 - [x] VI yank should populate windows clipboard
 - [x] Issue item number in editor header should be a link to the github issue
 - [x] Issue number in note list should link to the real github issue
+- [ ] Review .ts modules for refactoring / layering opportunities
+    - Reduce code duplication
+    - Clean up inappropriate dependencies
+    - Push utility functionality down into lower-layer module(s)
 - [ ] Need search in issue list to match title/repo
 - [ ] Replace favicon with a custom item
 - [x] Copy button on editor header doesn't wrap, disappearing if horiz space shrinks
