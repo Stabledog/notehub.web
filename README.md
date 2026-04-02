@@ -64,7 +64,7 @@ The `gh-pages` package pushes the contents of `dist/` to the `gh-pages` branch. 
 - [ ] Need search in issue list to match title/repo
 - [ ] Replace favicon with a custom item
 - [x] Copy button on editor header doesn't wrap, disappearing if horiz space shrinks
-- [ ] Note deletion ("archive")
+- [x] Note deletion ("archive")
     - Each note in the list should have a "..." context menu button.  On that menu, there should be a 'Delete' item with a red X icon.  User clicks that to archive a note so it stops showing up in the note list.
     - We don't actually ever delete notes, we archive them. To "archive" a note, use the github 'close issue' feature.  This will mean we need to change the note-finding logic to exclude closed issues.
 - [x] Vim-style navigation on notes list — j/k to move, enter to open, new-note via keyboard and mouse
