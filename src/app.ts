@@ -175,7 +175,7 @@ function renderEditor(title: string, body: string): void {
   app.innerHTML = `
     <div class="editor-screen">
       <header>
-        <button id="back-to-list">&larr; Notes</button>
+        <button id="back-to-list" title="Back to notes">&larr;</button>
         <input type="text" id="note-title" value="${escapeAttr(title)}" />
         <span id="note-number">${currentNote ? `<a href="${escapeAttr(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>` : 'new'}</span>
         ${currentNote ? `<button id="copy-note-url" class="copy-url-btn" title="Copy issue URL">${clipboardIcon}</button>` : ''}
