@@ -239,9 +239,33 @@ function handleQuit(force: boolean): void {
   const titleChanged = titleEl ? titleEl.value.trim() !== originalTitle : false;
 
   if (!force && (isEditorDirty(originalBody) || titleChanged)) {
-    if (!confirm('Unsaved changes. Discard?')) return;
+    showConfirmBar('Unsaved changes. Discard?', () => showNoteList());
+    return;
   }
   showNoteList();
+}
+
+function showConfirmBar(message: string, onConfirm: () => void): void {
+  // Remove any existing confirm bar
+  document.getElementById('confirm-bar')?.remove();
+
+  const bar = document.createElement('div');
+  bar.id = 'confirm-bar';
+  bar.innerHTML = `
+    <span>${message}</span>
+    <span class="confirm-hint">[y]es / [n]o</span>
+  `;
+
+  const header = document.querySelector('.editor-screen header');
+  if (!header) return;
+  header.after(bar);
+
+  const dismiss = () => { bar.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'y' || e.key === 'Enter') { dismiss(); onConfirm(); }
+    else if (e.key === 'n' || e.key === 'Escape') { dismiss(); }
+  };
+  document.addEventListener('keydown', onKey);
 }
 
 function showStatus(msg: string, isError = false): void {

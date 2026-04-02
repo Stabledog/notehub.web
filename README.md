@@ -51,20 +51,20 @@ The `gh-pages` package pushes the contents of `dist/` to the `gh-pages` branch. 
 - [x] Filter to notehub-tagged issues only — exclude unrelated issues everywhere
 - [x] Opening page shows all notes + manual refresh — list all discovered notes on landing, with a refresh button
 - [x] Copy buttons for each issue which place its raw URL onto clipboard.  And a similar button on the edit page for each issue.
-- [ ] Vim-style navigation on notes list — j/k to move, enter to open, new-note via keyboard and mouse
-- [ ] New note creation — need repo selection UX since notes can live in any repo
-    - List the orgs+repos already in use (don't try to enumerate all possibilities)
-    - Include an 'other' box, the user will manually input org/repo
 - [x] Make links work in the editor — Ctrl+Click opens URLs in a new tab
 - [x] Links in the editor should use the target=[hash] just like metabrowse (need to find the source code for that)
 - [x] Can the editor support mapping 'jk' to ESC?
 - [x] VI yank should populate windows clipboard
+- [x] Issue item number in editor header should be a link to the github issue
+- [x] Issue number in note list should link to the real github issue
 - [ ] Need search in issue list to match title/repo
 - [ ] Copy button on editor header doesn't wrap, disappearing if horiz space shrinks
-- [ ] Issue item number in editor header should be a link to the github issue
 - [ ] Note deletion | archive
     - To "archive" a note, add the 'notehub-archive' tag and remove 'notehub' tag
-- [ ] Issue number in note list should link to the real github issue
+- [ ] Vim-style navigation on notes list — j/k to move, enter to open, new-note via keyboard and mouse
+- [ ] New note creation — need repo selection UX since notes can live in any repo
+    - List the orgs+repos already in use (don't try to enumerate all possibilities)
+    - Include an 'other' box, the user will manually input org/repo
 
 ## Project Structure
 
