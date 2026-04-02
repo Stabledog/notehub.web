@@ -101,6 +101,15 @@ export async function createNote(
   });
 }
 
+export function archiveNote(
+  host: string, token: string, owner: string, repo: string, number: number,
+): Promise<GitHubIssue> {
+  return apiFetch<GitHubIssue>(host, token, `/repos/${owner}/${repo}/issues/${number}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ state: 'closed' }),
+  });
+}
+
 async function ensureLabel(host: string, token: string, owner: string, repo: string): Promise<void> {
   try {
     await apiFetch(host, token, `/repos/${owner}/${repo}/labels`, {

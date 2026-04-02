@@ -1,4 +1,4 @@
-import { validateToken, searchNotes, getNote, updateNote, createNote, DEFAULT_HOST, type NoteSearchResult } from './github';
+import { validateToken, searchNotes, getNote, updateNote, createNote, archiveNote, DEFAULT_HOST, type NoteSearchResult } from './github';
 import { createEditor, getEditorContent, isEditorDirty, destroyEditor } from './editor';
 import { hashTarget } from './util';
 
@@ -196,6 +196,7 @@ async function showNoteList(): Promise<void> {
               <td>${escapeHtml(n.title)}</td>
               <td>${new Date(n.updated_at).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}</td>
               <td><button class="copy-url-btn" data-url="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" title="Copy issue URL">${clipboardIcon}</button></td>
+              <td><button class="context-menu-btn" data-index="${i}" title="More actions">&#x2026;</button></td>
             </tr>
           `).join('')}
         </tbody>
@@ -209,6 +210,42 @@ async function showNoteList(): Promise<void> {
         navigator.clipboard.writeText(url).then(() => {
           btn.innerHTML = checkIcon;
           setTimeout(() => { btn.innerHTML = clipboardIcon; }, 1500);
+        });
+      });
+    });
+
+    container.querySelectorAll('.context-menu-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // Close any existing context menu
+        document.querySelector('.note-context-menu')?.remove();
+
+        const idx = parseInt((btn as HTMLElement).dataset.index!, 10);
+        const note = notesList[idx];
+        const rect = (btn as HTMLElement).getBoundingClientRect();
+
+        const menu = document.createElement('div');
+        menu.className = 'note-context-menu';
+        menu.innerHTML = `<button class="context-delete-btn">${xIcon} Delete</button>`;
+        menu.style.top = `${rect.bottom + 4}px`;
+        menu.style.left = `${rect.right}px`;
+        document.body.appendChild(menu);
+
+        const closeMenu = () => { menu.remove(); document.removeEventListener('click', closeMenu); };
+        // Close on next click anywhere
+        setTimeout(() => document.addEventListener('click', closeMenu), 0);
+
+        menu.querySelector('.context-delete-btn')!.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          closeMenu();
+          try {
+            await archiveNote(state!.host, state!.token, note.owner, note.repo, note.number);
+            // Remove the row from the list
+            const row = container.querySelector(`.note-row[data-index="${idx}"]`);
+            row?.remove();
+          } catch (err) {
+            alert(`Failed to delete note: ${err instanceof Error ? err.message : err}`);
+          }
         });
       });
     });
@@ -481,6 +518,7 @@ function escapeHtml(s: string): string {
 
 const clipboardIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const checkIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const xIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 
 function issueUrl(host: string, owner: string, repo: string, number: number): string {
   return `https://${host}/${owner}/${repo}/issues/${number}`;
