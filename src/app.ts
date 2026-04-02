@@ -1,11 +1,13 @@
-import { validateToken, listNotes, getNote, updateNote, createNote, type GitHubIssue } from './github';
+import { validateToken, listNotes, getNote, updateNote, createNote, DEFAULT_HOST, type GitHubIssue } from './github';
 import { createEditor, getEditorContent, isEditorDirty, destroyEditor } from './editor';
 
 const LS_TOKEN = 'notehub:token';
 const LS_OWNER = 'notehub:owner';
 const LS_REPO = 'notehub:repo';
+const LS_HOST = 'notehub:host';
 
 interface AppState {
+  host: string;
   token: string;
   owner: string;
   repo: string;
@@ -23,11 +25,12 @@ export function init(): void {
   const token = localStorage.getItem(LS_TOKEN);
   const owner = localStorage.getItem(LS_OWNER);
   const repo = localStorage.getItem(LS_REPO);
+  const host = localStorage.getItem(LS_HOST) ?? DEFAULT_HOST;
 
   if (token && owner && repo) {
-    validateToken(token)
+    validateToken(host, token)
       .then(user => {
-        state = { token, owner, repo, username: user.login };
+        state = { host, token, owner, repo, username: user.login };
         showNoteList();
       })
       .catch(() => showAuth());
@@ -38,6 +41,7 @@ export function init(): void {
 
 function showAuth(error?: string): void {
   destroyEditor();
+  const savedHost = localStorage.getItem(LS_HOST) ?? DEFAULT_HOST;
   const savedOwner = localStorage.getItem(LS_OWNER) ?? '';
   const savedRepo = localStorage.getItem(LS_REPO) ?? '';
 
@@ -47,7 +51,10 @@ function showAuth(error?: string): void {
       <p>GitHub Issues as notes, with vi keybindings.</p>
       ${error ? `<div class="error">${error}</div>` : ''}
       <form id="auth-form">
-        <label>GitHub Personal Access Token
+        <label>GitHub Host
+          <input type="text" id="host" value="${savedHost}" required />
+        </label>
+        <label>Personal Access Token
           <input type="password" id="pat" placeholder="ghp_..." required />
         </label>
         <label>Owner (org or user)
@@ -63,16 +70,18 @@ function showAuth(error?: string): void {
 
   document.getElementById('auth-form')!.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const host = (document.getElementById('host') as HTMLInputElement).value.trim();
     const token = (document.getElementById('pat') as HTMLInputElement).value.trim();
     const owner = (document.getElementById('owner') as HTMLInputElement).value.trim();
     const repo = (document.getElementById('repo') as HTMLInputElement).value.trim();
 
     try {
-      const user = await validateToken(token);
+      const user = await validateToken(host, token);
+      localStorage.setItem(LS_HOST, host);
       localStorage.setItem(LS_TOKEN, token);
       localStorage.setItem(LS_OWNER, owner);
       localStorage.setItem(LS_REPO, repo);
-      state = { token, owner, repo, username: user.login };
+      state = { host, token, owner, repo, username: user.login };
       showNoteList();
     } catch (err) {
       showAuth(`Authentication failed: ${err instanceof Error ? err.message : err}`);
@@ -106,6 +115,7 @@ async function showNoteList(): Promise<void> {
 
   document.getElementById('sign-out')!.addEventListener('click', () => {
     localStorage.removeItem(LS_TOKEN);
+    localStorage.removeItem(LS_HOST);
     state = null;
     showAuth();
   });
@@ -119,7 +129,7 @@ async function showNoteList(): Promise<void> {
   document.getElementById('refresh')!.addEventListener('click', () => showNoteList());
 
   try {
-    const notes = await listNotes(state.token, state.owner, state.repo);
+    const notes = await listNotes(state.host, state.token, state.owner, state.repo);
     const container = document.getElementById('notes-container')!;
 
     if (notes.length === 0) {
@@ -160,7 +170,7 @@ async function openNote(number: number): Promise<void> {
   app.innerHTML = `<div class="editor-screen"><p>Loading note #${number}...</p></div>`;
 
   try {
-    const note = await getNote(state.token, state.owner, state.repo, number);
+    const note = await getNote(state.host, state.token, state.owner, state.repo, number);
     currentNote = note;
     originalBody = note.body ?? '';
     originalTitle = note.title;
@@ -175,7 +185,7 @@ async function openNewNote(title: string): Promise<void> {
 
   try {
     showStatus('Creating note...');
-    const note = await createNote(state.token, state.owner, state.repo, title, '');
+    const note = await createNote(state.host, state.token, state.owner, state.repo, title, '');
     currentNote = note;
     originalBody = '';
     originalTitle = title;
@@ -226,7 +236,7 @@ async function handleSave(): Promise<void> {
 
   try {
     showStatus('Saving...');
-    const updated = await updateNote(state.token, state.owner, state.repo, currentNote.number, data);
+    const updated = await updateNote(state.host, state.token, state.owner, state.repo, currentNote.number, data);
     originalBody = updated.body ?? '';
     originalTitle = updated.title;
     currentNote = updated;

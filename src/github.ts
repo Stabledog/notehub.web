@@ -1,4 +1,9 @@
-const API_BASE = 'https://api.github.com';
+const DEFAULT_HOST = 'bbgithub.dev.bloomberg.com';
+
+function apiBase(host: string): string {
+  if (host === 'github.com') return 'https://api.github.com';
+  return `https://${host}/api/v3`;
+}
 
 export interface GitHubUser {
   login: string;
@@ -21,8 +26,10 @@ function headers(token: string): HeadersInit {
   };
 }
 
-async function apiFetch<T>(token: string, path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+export { DEFAULT_HOST };
+
+async function apiFetch<T>(host: string, token: string, path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${apiBase(host)}${path}`, {
     ...init,
     headers: { ...headers(token), ...init?.headers },
   });
@@ -33,45 +40,45 @@ async function apiFetch<T>(token: string, path: string, init?: RequestInit): Pro
   return res.json() as Promise<T>;
 }
 
-export function validateToken(token: string): Promise<GitHubUser> {
-  return apiFetch<GitHubUser>(token, '/user');
+export function validateToken(host: string, token: string): Promise<GitHubUser> {
+  return apiFetch<GitHubUser>(host, token, '/user');
 }
 
-export function listNotes(token: string, owner: string, repo: string): Promise<GitHubIssue[]> {
+export function listNotes(host: string, token: string, owner: string, repo: string): Promise<GitHubIssue[]> {
   return apiFetch<GitHubIssue[]>(
-    token,
+    host, token,
     `/repos/${owner}/${repo}/issues?labels=notehub&state=open&per_page=100&sort=updated&direction=desc`,
   );
 }
 
-export function getNote(token: string, owner: string, repo: string, number: number): Promise<GitHubIssue> {
-  return apiFetch<GitHubIssue>(token, `/repos/${owner}/${repo}/issues/${number}`);
+export function getNote(host: string, token: string, owner: string, repo: string, number: number): Promise<GitHubIssue> {
+  return apiFetch<GitHubIssue>(host, token, `/repos/${owner}/${repo}/issues/${number}`);
 }
 
 export function updateNote(
-  token: string, owner: string, repo: string, number: number,
+  host: string, token: string, owner: string, repo: string, number: number,
   data: { title?: string; body?: string },
 ): Promise<GitHubIssue> {
-  return apiFetch<GitHubIssue>(token, `/repos/${owner}/${repo}/issues/${number}`, {
+  return apiFetch<GitHubIssue>(host, token, `/repos/${owner}/${repo}/issues/${number}`, {
     method: 'PATCH',
     body: JSON.stringify(data),
   });
 }
 
 export async function createNote(
-  token: string, owner: string, repo: string,
+  host: string, token: string, owner: string, repo: string,
   title: string, body: string,
 ): Promise<GitHubIssue> {
-  await ensureLabel(token, owner, repo);
-  return apiFetch<GitHubIssue>(token, `/repos/${owner}/${repo}/issues`, {
+  await ensureLabel(host, token, owner, repo);
+  return apiFetch<GitHubIssue>(host, token, `/repos/${owner}/${repo}/issues`, {
     method: 'POST',
     body: JSON.stringify({ title, body, labels: ['notehub'] }),
   });
 }
 
-async function ensureLabel(token: string, owner: string, repo: string): Promise<void> {
+async function ensureLabel(host: string, token: string, owner: string, repo: string): Promise<void> {
   try {
-    await apiFetch(token, `/repos/${owner}/${repo}/labels`, {
+    await apiFetch(host, token, `/repos/${owner}/${repo}/labels`, {
       method: 'POST',
       body: JSON.stringify({ name: 'notehub', color: '1d76db', description: 'notehub note' }),
     });
