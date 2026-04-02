@@ -1,5 +1,6 @@
 import { validateToken, searchNotes, getNote, updateNote, DEFAULT_HOST, type NoteSearchResult } from './github';
 import { createEditor, getEditorContent, isEditorDirty, destroyEditor } from './editor';
+import { hashTarget } from './util';
 
 const LS_TOKEN = 'notehub:token';
 const LS_HOST = 'notehub:host';
@@ -120,7 +121,7 @@ async function showNoteList(): Promise<void> {
           ${notesList.map((n, i) => `
             <tr class="note-row" data-index="${i}">
               <td>${escapeHtml(n.owner)}/${escapeHtml(n.repo)}</td>
-              <td>${n.number}</td>
+              <td><a href="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" target="${hashTarget(issueUrl(state!.host, n.owner, n.repo, n.number))}" class="issue-link" onclick="event.stopPropagation()">${n.number}</a></td>
               <td>${escapeHtml(n.title)}</td>
               <td>${new Date(n.updated_at).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}</td>
               <td><button class="copy-url-btn" data-url="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" title="Copy issue URL">${clipboardIcon}</button></td>
@@ -176,7 +177,7 @@ function renderEditor(title: string, body: string): void {
       <header>
         <button id="back-to-list">&larr; Notes</button>
         <input type="text" id="note-title" value="${escapeAttr(title)}" />
-        <span id="note-number">${currentNote ? `#${currentNote.number}` : 'new'}</span>
+        <span id="note-number">${currentNote ? `<a href="${escapeAttr(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>` : 'new'}</span>
         ${currentNote ? `<button id="copy-note-url" class="copy-url-btn" title="Copy issue URL">${clipboardIcon}</button>` : ''}
         <span id="status-msg"></span>
       </header>

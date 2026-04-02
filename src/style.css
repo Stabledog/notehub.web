@@ -243,6 +243,15 @@ thead th {
   font-size: 0.875rem;
 }
 
+.issue-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.issue-link:hover {
+  text-decoration: underline;
+}
+
 #status-msg {
   font-size: 0.875rem;
   margin-left: auto;
