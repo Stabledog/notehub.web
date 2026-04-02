@@ -6,6 +6,34 @@ import { languages } from '@codemirror/language-data';
 import { basicSetup } from 'codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
 
+/** Find a URL at a given character offset within a line of text. */
+function urlAtPosition(lineText: string, col: number): string | null {
+  const urlRe = /https?:\/\/[^\s)\]>]+/g;
+  let m;
+  while ((m = urlRe.exec(lineText)) !== null) {
+    if (col >= m.index && col < m.index + m[0].length) return m[0];
+  }
+  return null;
+}
+
+/** Ctrl+Click opens URLs in a new tab. */
+const clickableLinks = EditorView.domEventHandlers({
+  click(event: MouseEvent, view: EditorView) {
+    if (!event.ctrlKey) return false;
+    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+    if (pos == null) return false;
+    const line = view.state.doc.lineAt(pos);
+    const col = pos - line.from;
+    const url = urlAtPosition(line.text, col);
+    if (url) {
+      window.open(url, '_blank', 'noopener');
+      event.preventDefault();
+      return true;
+    }
+    return false;
+  },
+});
+
 export interface EditorCallbacks {
   onSave: () => Promise<void>;
   onQuit: (force: boolean) => void;
@@ -42,6 +70,7 @@ export function createEditor(
       markdown({ codeLanguages: languages }),
       oneDark,
       keymap.of([]),
+      clickableLinks,
       EditorView.theme({
         '&': { height: '100%' },
         '.cm-scroller': { overflow: 'auto' },
