@@ -11,7 +11,7 @@ npm install
 npm run dev        # local dev server at http://localhost:5173
 ```
 
-Open the browser, enter your PAT, org/repo, and start editing. Notes are GitHub Issues labeled `notehub`.
+Open the browser, enter your GitHub host and PAT, and start editing. Notes are GitHub Issues labeled `notehub`, discovered across all repos you have access to.
 
 ## Editor Keybindings
 
@@ -44,6 +44,14 @@ The `gh-pages` package pushes the contents of `dist/` to the `gh-pages` branch. 
 - **@codemirror/theme-one-dark** — editor theme
 - **GitHub REST API** — direct fetch from browser, no backend
 - **localStorage** — PAT, host, org/repo persistence
+
+## TODO
+
+- [x] Cross-org/repo note discovery — search by `notehub` label across all repos via Search API, not just one repo
+- [x] Filter to notehub-tagged issues only — exclude unrelated issues everywhere
+- [ ] Opening page shows all notes + manual refresh — list all discovered notes on landing, with a refresh button
+- [ ] Vim-style navigation on notes list — j/k to move, enter to open, new-note via keyboard and mouse
+- [ ] New note creation — need repo selection UX since notes can live in any repo
 
 ## Project Structure
 
