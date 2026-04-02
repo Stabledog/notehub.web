@@ -64,6 +64,24 @@ export function createEditor(
 
   Vim.map('jk', '<Esc>', 'insert');
 
+  // Sync vim registers with the system clipboard so yank/paste work across
+  // the browser boundary without needing the "+ register prefix.
+  const rc = (Vim as any).getRegisterController();
+  const origPush = rc.pushText.bind(rc);
+  rc.pushText = (
+    regName: string | null | undefined,
+    op: string,
+    text: string,
+    linewise?: boolean,
+    blockwise?: boolean,
+  ) => {
+    origPush(regName, op, text, linewise, blockwise);
+    // Write every yank/delete to the system clipboard.
+    if (regName !== '_') {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+  };
+
   const state = EditorState.create({
     doc: content,
     extensions: [
@@ -81,6 +99,17 @@ export function createEditor(
   });
 
   editorView = new EditorView({ state, parent });
+
+  // When the editor regains focus, pull the system clipboard into the unnamed
+  // register so that `p` pastes content copied from outside the editor.
+  editorView.contentDOM.addEventListener('focus', () => {
+    navigator.clipboard.readText().then((text) => {
+      if (text) {
+        rc.unnamedRegister.setText(text);
+      }
+    }).catch(() => {});
+  });
+
   editorView.focus();
   return editorView;
 }
