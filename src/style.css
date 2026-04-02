@@ -1,0 +1,257 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  height: 100vh;
+  overflow: hidden;
+}
+
+#app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Auth screen */
+.auth-screen {
+  max-width: 400px;
+  margin: 15vh auto;
+  padding: 2rem;
+}
+
+.auth-screen h1 {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+  color: #89b4fa;
+}
+
+.auth-screen p {
+  margin-bottom: 1.5rem;
+  color: #a6adc8;
+}
+
+.auth-screen form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.auth-screen label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.875rem;
+  color: #a6adc8;
+}
+
+.auth-screen input {
+  padding: 0.5rem;
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  color: #cdd6f4;
+  font-size: 1rem;
+}
+
+.auth-screen input:focus {
+  outline: none;
+  border-color: #89b4fa;
+}
+
+.auth-screen button {
+  padding: 0.625rem;
+  background: #89b4fa;
+  color: #1e1e2e;
+  border: none;
+  border-radius: 4px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-screen button:hover {
+  background: #74c7ec;
+}
+
+/* Note list */
+.note-list-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 1rem;
+}
+
+.note-list-screen header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.note-list-screen header h1 {
+  font-size: 1.5rem;
+  color: #89b4fa;
+}
+
+.header-info {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.875rem;
+  color: #a6adc8;
+}
+
+.header-info button {
+  padding: 0.25rem 0.75rem;
+  background: #45475a;
+  border: none;
+  border-radius: 4px;
+  color: #cdd6f4;
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.header-info button:hover {
+  background: #585b70;
+}
+
+.toolbar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.toolbar button {
+  padding: 0.375rem 1rem;
+  background: #89b4fa;
+  color: #1e1e2e;
+  border: none;
+  border-radius: 4px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toolbar button:hover {
+  background: #74c7ec;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+thead th {
+  text-align: left;
+  padding: 0.5rem;
+  border-bottom: 1px solid #45475a;
+  color: #a6adc8;
+  font-size: 0.875rem;
+}
+
+.note-row {
+  cursor: pointer;
+}
+
+.note-row td {
+  padding: 0.5rem;
+  border-bottom: 1px solid #313244;
+}
+
+.note-row:hover {
+  background: #313244;
+}
+
+.empty {
+  color: #a6adc8;
+  padding: 2rem;
+  text-align: center;
+}
+
+/* Editor screen */
+.editor-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.editor-screen header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  background: #181825;
+  border-bottom: 1px solid #313244;
+}
+
+.editor-screen header button {
+  padding: 0.25rem 0.75rem;
+  background: #45475a;
+  border: none;
+  border-radius: 4px;
+  color: #cdd6f4;
+  cursor: pointer;
+}
+
+.editor-screen header button:hover {
+  background: #585b70;
+}
+
+#note-title {
+  flex: 1;
+  padding: 0.375rem 0.5rem;
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  color: #cdd6f4;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+#note-title:focus {
+  outline: none;
+  border-color: #89b4fa;
+}
+
+#note-number {
+  color: #a6adc8;
+  font-size: 0.875rem;
+}
+
+#status-msg {
+  font-size: 0.875rem;
+  margin-left: auto;
+}
+
+#status-msg.success {
+  color: #a6e3a1;
+}
+
+#status-msg.error {
+  color: #f38ba8;
+}
+
+#editor-container {
+  flex: 1;
+  overflow: hidden;
+}
+
+.error {
+  color: #f38ba8;
+}
+
+/* CodeMirror overrides */
+.cm-editor {
+  height: 100%;
+  font-size: 14px;
+}
+
+.cm-editor .cm-content {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
