@@ -1,4 +1,4 @@
-import { validateToken, searchNotes, getNote, updateNote, DEFAULT_HOST, type NoteSearchResult } from './github';
+import { validateToken, searchNotes, getNote, updateNote, createNote, DEFAULT_HOST, type NoteSearchResult } from './github';
 import { createEditor, getEditorContent, isEditorDirty, destroyEditor } from './editor';
 import { hashTarget } from './util';
 
@@ -11,8 +11,15 @@ interface AppState {
   username: string;
 }
 
+const DEFAULT_NEW_TITLE = '\ud83c\udfab New note';
+const DEFAULT_NEW_BODY = '# New note';
+const DEFAULT_REPO = 'lmatheson4/notehub.default';
+const PINNED_ISSUE = { owner: 'lmatheson4', repo: 'notehub.default', number: 7 };
+
 let state: AppState | null = null;
 let currentNote: NoteSearchResult | null = null;
+let newNoteTarget: { owner: string; repo: string } | null = null;
+
 let originalBody = '';
 let originalTitle = '';
 
@@ -72,8 +79,12 @@ function showAuth(error?: string): void {
   });
 }
 
+let cleanupListKeys: (() => void) | null = null;
+
 async function showNoteList(): Promise<void> {
   destroyEditor();
+  cleanupListKeys?.();
+  cleanupListKeys = null;
   currentNote = null;
 
   if (!state) return;
@@ -90,11 +101,64 @@ async function showNoteList(): Promise<void> {
         </div>
       </header>
       <div class="toolbar">
+        <button id="new-note">New Note</button>
         <button id="refresh">Refresh</button>
       </div>
       <div id="notes-container"><p>Loading...</p></div>
+      <footer class="note-list-footer">
+        <span><kbd>j</kbd><kbd>k</kbd> Navigate</span>
+        <span><kbd>Enter</kbd> Open note</span>
+        <span><kbd>n</kbd> New note</span>
+        <span><kbd>r</kbd> Refresh</span>
+      </footer>
     </div>
   `;
+
+  const container = document.getElementById('notes-container')!;
+  let selectedIndex = 0;
+
+  function updateSelection() {
+    const rows = container.querySelectorAll('.note-row');
+    rows.forEach((row, i) => {
+      row.classList.toggle('selected', i === selectedIndex);
+    });
+    rows[selectedIndex]?.scrollIntoView({ block: 'nearest' });
+  }
+
+  const onListKey = (e: KeyboardEvent) => {
+    // Ignore if typing in an input or if overlay is open
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (document.getElementById('repo-picker-overlay')) return;
+
+    if (e.key === 'n') {
+      e.preventDefault();
+      document.getElementById('new-note')!.click();
+    } else if (e.key === 'r') {
+      e.preventDefault();
+      showNoteList();
+    } else if (e.key === 'j' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      const rows = container.querySelectorAll('.note-row');
+      if (rows.length > 0) {
+        selectedIndex = Math.min(selectedIndex + 1, rows.length - 1);
+        updateSelection();
+      }
+    } else if (e.key === 'k' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (selectedIndex > 0) {
+        selectedIndex--;
+        updateSelection();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const rows = container.querySelectorAll('.note-row');
+      if (rows.length > 0) {
+        (rows[selectedIndex] as HTMLElement).click();
+      }
+    }
+  };
+  document.addEventListener('keydown', onListKey);
+  cleanupListKeys = () => document.removeEventListener('keydown', onListKey);
 
   document.getElementById('sign-out')!.addEventListener('click', () => {
     localStorage.removeItem(LS_TOKEN);
@@ -107,8 +171,15 @@ async function showNoteList(): Promise<void> {
 
   try {
     notesList = await searchNotes(state.host, state.token);
-    const container = document.getElementById('notes-container')!;
 
+    // Pin the default issue to the top
+    const isPinned = (n: NoteSearchResult) =>
+      n.owner === PINNED_ISSUE.owner && n.repo === PINNED_ISSUE.repo && n.number === PINNED_ISSUE.number;
+    notesList.sort((a, b) => (isPinned(a) ? -1 : isPinned(b) ? 1 : 0));
+
+    document.getElementById('new-note')!.addEventListener('click', () => {
+      showRepoPicker(notesList);
+    });
     if (notesList.length === 0) {
       container.innerHTML = '<p class="empty">No notes found.</p>';
       return;
@@ -149,10 +220,104 @@ async function showNoteList(): Promise<void> {
         openNote(note.owner, note.repo, note.number);
       });
     });
+
+    updateSelection();
   } catch (err) {
     document.getElementById('notes-container')!.innerHTML =
       `<p class="error">Failed to load notes: ${err instanceof Error ? err.message : err}</p>`;
   }
+}
+
+function showRepoPicker(notesList: NoteSearchResult[]): void {
+  // Remove existing picker if any
+  document.getElementById('repo-picker-overlay')?.remove();
+
+  // Extract unique owner/repo pairs, sorted with default repo first
+  const repoSet = new Map<string, { owner: string; repo: string }>();
+  // Always include the default repo
+  const [defOwner, defRepo] = DEFAULT_REPO.split('/');
+  repoSet.set(DEFAULT_REPO, { owner: defOwner, repo: defRepo });
+  for (const n of notesList) {
+    const key = `${n.owner}/${n.repo}`;
+    if (!repoSet.has(key)) repoSet.set(key, { owner: n.owner, repo: n.repo });
+  }
+  const sortedRepos = Array.from(repoSet.entries()).sort((a, b) => {
+    if (a[0] === DEFAULT_REPO) return -1;
+    if (b[0] === DEFAULT_REPO) return 1;
+    return a[0].localeCompare(b[0]);
+  });
+
+  const overlay = document.createElement('div');
+  overlay.id = 'repo-picker-overlay';
+  overlay.innerHTML = `
+    <div class="repo-picker">
+      <h2>Select repository</h2>
+      <div class="repo-list">
+        ${sortedRepos.map(([key, r]) => `
+          <button class="repo-option" data-owner="${escapeAttr(r.owner)}" data-repo="${escapeAttr(r.repo)}">${escapeHtml(key)}</button>
+        `).join('')}
+      </div>
+      <div class="repo-other">
+        <label>Other
+          <input type="text" id="repo-other-input" placeholder="owner/repo" />
+        </label>
+        <button id="repo-other-go">Go</button>
+      </div>
+    </div>
+  `;
+
+  app.appendChild(overlay);
+
+  // Close on overlay background click
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+
+  // Close on Escape
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', onKey); }
+  };
+  document.addEventListener('keydown', onKey);
+
+  // Repo buttons
+  overlay.querySelectorAll('.repo-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const owner = (btn as HTMLElement).dataset.owner!;
+      const repo = (btn as HTMLElement).dataset.repo!;
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+      openNewNote(owner, repo);
+    });
+  });
+
+  // Other input
+  const goBtn = document.getElementById('repo-other-go')!;
+  const otherInput = document.getElementById('repo-other-input') as HTMLInputElement;
+
+  const submitOther = () => {
+    const val = otherInput.value.trim();
+    const parts = val.split('/');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      otherInput.classList.add('error');
+      return;
+    }
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+    openNewNote(parts[0], parts[1]);
+  };
+
+  goBtn.addEventListener('click', submitOther);
+  otherInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submitOther();
+  });
+}
+
+function openNewNote(owner: string, repo: string): void {
+  newNoteTarget = { owner, repo };
+  currentNote = null;
+  originalBody = DEFAULT_NEW_BODY;
+  originalTitle = DEFAULT_NEW_TITLE;
+  renderEditor(DEFAULT_NEW_TITLE, DEFAULT_NEW_BODY);
 }
 
 async function openNote(owner: string, repo: string, number: number): Promise<void> {
@@ -177,7 +342,7 @@ function renderEditor(title: string, body: string): void {
       <header>
         <button id="back-to-list" title="Back to notes">&larr;</button>
         <input type="text" id="note-title" value="${escapeAttr(title)}" />
-        <span id="note-number">${currentNote ? `<a href="${escapeAttr(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>` : 'new'}</span>
+        <span id="note-number">${currentNote ? `<a href="${escapeAttr(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>` : 'Title'}</span>
         ${currentNote ? `<button id="copy-note-url" class="copy-url-btn" title="Copy issue URL">${clipboardIcon}</button>` : ''}
         <span id="status-msg"></span>
       </header>
@@ -207,12 +372,41 @@ function renderEditor(title: string, body: string): void {
 }
 
 async function handleSave(): Promise<void> {
-  if (!state || !currentNote) return;
+  if (!state) return;
 
   const body = getEditorContent();
   const titleEl = document.getElementById('note-title') as HTMLInputElement;
   const title = titleEl.value.trim();
 
+  // Creating a new note
+  if (!currentNote && newNoteTarget) {
+    if (!title) {
+      showStatus('Title required', true);
+      return;
+    }
+    try {
+      showStatus('Creating...');
+      const created = await createNote(state.host, state.token, newNoteTarget.owner, newNoteTarget.repo, title, body);
+      currentNote = { ...created, owner: newNoteTarget.owner, repo: newNoteTarget.repo };
+      newNoteTarget = null;
+      originalBody = created.body ?? '';
+      originalTitle = created.title;
+      // Update header to show issue number
+      const numEl = document.getElementById('note-number');
+      if (numEl) {
+        numEl.innerHTML = `<a href="${escapeAttr(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>`;
+      }
+
+      showStatus('Created');
+    } catch (err) {
+      showStatus(`Create failed: ${err instanceof Error ? err.message : err}`, true);
+    }
+    return;
+  }
+
+  if (!currentNote) return;
+
+  // Updating an existing note
   const data: { title?: string; body?: string } = {};
   if (body !== originalBody) data.body = body;
   if (title !== originalTitle) data.title = title;
@@ -225,6 +419,7 @@ async function handleSave(): Promise<void> {
   try {
     showStatus('Saving...');
     const updated = await updateNote(state.host, state.token, currentNote.owner, currentNote.repo, currentNote.number, data);
+
     originalBody = updated.body ?? '';
     originalTitle = updated.title;
     currentNote = { ...updated, owner: currentNote.owner, repo: currentNote.repo };
