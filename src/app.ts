@@ -122,8 +122,8 @@ async function showNoteList(): Promise<void> {
               <td>${escapeHtml(n.owner)}/${escapeHtml(n.repo)}</td>
               <td>${n.number}</td>
               <td>${escapeHtml(n.title)}</td>
-              <td>${new Date(n.updated_at).toLocaleDateString()}</td>
-              <td><button class="copy-url-btn" data-url="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" title="Copy issue URL">Copy URL</button></td>
+              <td>${new Date(n.updated_at).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}</td>
+              <td><button class="copy-url-btn" data-url="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" title="Copy issue URL">${clipboardIcon}</button></td>
             </tr>
           `).join('')}
         </tbody>
@@ -135,9 +135,8 @@ async function showNoteList(): Promise<void> {
         e.stopPropagation();
         const url = (btn as HTMLElement).dataset.url!;
         navigator.clipboard.writeText(url).then(() => {
-          const orig = btn.textContent;
-          btn.textContent = 'Copied!';
-          setTimeout(() => { btn.textContent = orig; }, 1500);
+          btn.innerHTML = checkIcon;
+          setTimeout(() => { btn.innerHTML = clipboardIcon; }, 1500);
         });
       });
     });
@@ -178,7 +177,7 @@ function renderEditor(title: string, body: string): void {
         <button id="back-to-list">&larr; Notes</button>
         <input type="text" id="note-title" value="${escapeAttr(title)}" />
         <span id="note-number">${currentNote ? `#${currentNote.number}` : 'new'}</span>
-        ${currentNote ? `<button id="copy-note-url" title="Copy issue URL">Copy URL</button>` : ''}
+        ${currentNote ? `<button id="copy-note-url" class="copy-url-btn" title="Copy issue URL">${clipboardIcon}</button>` : ''}
         <span id="status-msg"></span>
       </header>
       <div id="editor-container"></div>
@@ -194,9 +193,8 @@ function renderEditor(title: string, body: string): void {
     const url = issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number);
     copyBtn.addEventListener('click', () => {
       navigator.clipboard.writeText(url).then(() => {
-        const orig = copyBtn.textContent;
-        copyBtn.textContent = 'Copied!';
-        setTimeout(() => { copyBtn.textContent = orig; }, 1500);
+        copyBtn.innerHTML = checkIcon;
+        setTimeout(() => { copyBtn.innerHTML = clipboardIcon; }, 1500);
       });
     });
   }
@@ -260,6 +258,9 @@ function escapeHtml(s: string): string {
   div.textContent = s;
   return div.innerHTML;
 }
+
+const clipboardIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const checkIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 
 function issueUrl(host: string, owner: string, repo: string, number: number): string {
   return `https://${host}/${owner}/${repo}/issues/${number}`;
