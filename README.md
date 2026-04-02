@@ -56,9 +56,9 @@ The `gh-pages` package pushes the contents of `dist/` to the `gh-pages` branch. 
     - List the orgs+repos already in use (don't try to enumerate all possibilities)
     - Include an 'other' box, the user will manually input org/repo
 - [x] Make links work in the editor — Ctrl+Click opens URLs in a new tab
-- [ ] Links in the editor should use the target=[hash] just like metabrowse (need to find the source code for that)
+- [x] Links in the editor should use the target=[hash] just like metabrowse (need to find the source code for that)
 - [x] Can the editor support mapping 'jk' to ESC?
-- [ ] VI yank should populate windows clipboard
+- [x] VI yank should populate windows clipboard
 - [ ] Copy button on editor header doesn't wrap, disappearing if horiz space shrinks
 - [ ] Issue item number in editor header should be a link to the github issue
 - [ ] Note deletion | archive
