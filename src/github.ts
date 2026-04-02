@@ -18,6 +18,16 @@ export interface GitHubIssue {
   state: string;
 }
 
+export interface NoteSearchResult extends GitHubIssue {
+  owner: string;
+  repo: string;
+}
+
+interface SearchResponse {
+  total_count: number;
+  items: (GitHubIssue & { repository_url: string })[];
+}
+
 function headers(token: string): HeadersInit {
   return {
     Authorization: `Bearer ${token}`,
@@ -49,6 +59,21 @@ export function listNotes(host: string, token: string, owner: string, repo: stri
     host, token,
     `/repos/${owner}/${repo}/issues?labels=notehub&state=open&per_page=100&sort=updated&direction=desc`,
   );
+}
+
+export async function searchNotes(host: string, token: string): Promise<NoteSearchResult[]> {
+  const q = encodeURIComponent('label:notehub state:open');
+  const data = await apiFetch<SearchResponse>(
+    host, token,
+    `/search/issues?q=${q}&sort=updated&order=desc&per_page=100`,
+  );
+  return data.items.map(item => {
+    // repository_url looks like https://{host}/api/v3/repos/{owner}/{repo}
+    const parts = item.repository_url.split('/');
+    const repo = parts.pop()!;
+    const owner = parts.pop()!;
+    return { ...item, owner, repo };
+  });
 }
 
 export function getNote(host: string, token: string, owner: string, repo: string, number: number): Promise<GitHubIssue> {

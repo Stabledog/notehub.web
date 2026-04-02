@@ -1,21 +1,17 @@
-import { validateToken, listNotes, getNote, updateNote, createNote, DEFAULT_HOST, type GitHubIssue } from './github';
+import { validateToken, searchNotes, getNote, updateNote, DEFAULT_HOST, type NoteSearchResult } from './github';
 import { createEditor, getEditorContent, isEditorDirty, destroyEditor } from './editor';
 
 const LS_TOKEN = 'notehub:token';
-const LS_OWNER = 'notehub:owner';
-const LS_REPO = 'notehub:repo';
 const LS_HOST = 'notehub:host';
 
 interface AppState {
   host: string;
   token: string;
-  owner: string;
-  repo: string;
   username: string;
 }
 
 let state: AppState | null = null;
-let currentNote: GitHubIssue | null = null;
+let currentNote: NoteSearchResult | null = null;
 let originalBody = '';
 let originalTitle = '';
 
@@ -23,14 +19,12 @@ const app = document.getElementById('app')!;
 
 export function init(): void {
   const token = localStorage.getItem(LS_TOKEN);
-  const owner = localStorage.getItem(LS_OWNER);
-  const repo = localStorage.getItem(LS_REPO);
   const host = localStorage.getItem(LS_HOST) ?? DEFAULT_HOST;
 
-  if (token && owner && repo) {
+  if (token) {
     validateToken(host, token)
       .then(user => {
-        state = { host, token, owner, repo, username: user.login };
+        state = { host, token, username: user.login };
         showNoteList();
       })
       .catch(() => showAuth());
@@ -42,8 +36,6 @@ export function init(): void {
 function showAuth(error?: string): void {
   destroyEditor();
   const savedHost = localStorage.getItem(LS_HOST) ?? DEFAULT_HOST;
-  const savedOwner = localStorage.getItem(LS_OWNER) ?? '';
-  const savedRepo = localStorage.getItem(LS_REPO) ?? '';
 
   app.innerHTML = `
     <div class="auth-screen">
@@ -57,12 +49,6 @@ function showAuth(error?: string): void {
         <label>Personal Access Token
           <input type="password" id="pat" placeholder="ghp_..." required />
         </label>
-        <label>Owner (org or user)
-          <input type="text" id="owner" value="${savedOwner}" placeholder="my-org" required />
-        </label>
-        <label>Repository
-          <input type="text" id="repo" value="${savedRepo}" placeholder="my-notes" required />
-        </label>
         <button type="submit">Connect</button>
       </form>
     </div>
@@ -72,16 +58,12 @@ function showAuth(error?: string): void {
     e.preventDefault();
     const host = (document.getElementById('host') as HTMLInputElement).value.trim();
     const token = (document.getElementById('pat') as HTMLInputElement).value.trim();
-    const owner = (document.getElementById('owner') as HTMLInputElement).value.trim();
-    const repo = (document.getElementById('repo') as HTMLInputElement).value.trim();
 
     try {
       const user = await validateToken(host, token);
       localStorage.setItem(LS_HOST, host);
       localStorage.setItem(LS_TOKEN, token);
-      localStorage.setItem(LS_OWNER, owner);
-      localStorage.setItem(LS_REPO, repo);
-      state = { host, token, owner, repo, username: user.login };
+      state = { host, token, username: user.login };
       showNoteList();
     } catch (err) {
       showAuth(`Authentication failed: ${err instanceof Error ? err.message : err}`);
@@ -95,18 +77,18 @@ async function showNoteList(): Promise<void> {
 
   if (!state) return;
 
+  let notesList: NoteSearchResult[] = [];
+
   app.innerHTML = `
     <div class="note-list-screen">
       <header>
         <h1>notehub</h1>
         <div class="header-info">
-          <span>${state.owner}/${state.repo}</span>
           <span>@${state.username}</span>
           <button id="sign-out">Sign out</button>
         </div>
       </header>
       <div class="toolbar">
-        <button id="new-note">New Note</button>
         <button id="refresh">Refresh</button>
       </div>
       <div id="notes-container"><p>Loading...</p></div>
@@ -120,29 +102,24 @@ async function showNoteList(): Promise<void> {
     showAuth();
   });
 
-  document.getElementById('new-note')!.addEventListener('click', () => {
-    const title = prompt('Note title:');
-    if (!title) return;
-    openNewNote(title);
-  });
-
   document.getElementById('refresh')!.addEventListener('click', () => showNoteList());
 
   try {
-    const notes = await listNotes(state.host, state.token, state.owner, state.repo);
+    notesList = await searchNotes(state.host, state.token);
     const container = document.getElementById('notes-container')!;
 
-    if (notes.length === 0) {
-      container.innerHTML = '<p class="empty">No notes yet. Create one!</p>';
+    if (notesList.length === 0) {
+      container.innerHTML = '<p class="empty">No notes found.</p>';
       return;
     }
 
     container.innerHTML = `
       <table>
-        <thead><tr><th>#</th><th>Title</th><th>Updated</th></tr></thead>
+        <thead><tr><th>Repo</th><th>#</th><th>Title</th><th>Updated</th></tr></thead>
         <tbody>
-          ${notes.map(n => `
-            <tr class="note-row" data-number="${n.number}">
+          ${notesList.map((n, i) => `
+            <tr class="note-row" data-index="${i}">
+              <td>${escapeHtml(n.owner)}/${escapeHtml(n.repo)}</td>
               <td>${n.number}</td>
               <td>${escapeHtml(n.title)}</td>
               <td>${new Date(n.updated_at).toLocaleDateString()}</td>
@@ -154,8 +131,9 @@ async function showNoteList(): Promise<void> {
 
     container.querySelectorAll('.note-row').forEach(row => {
       row.addEventListener('click', () => {
-        const num = parseInt(row.getAttribute('data-number')!, 10);
-        openNote(num);
+        const idx = parseInt(row.getAttribute('data-index')!, 10);
+        const note = notesList[idx];
+        openNote(note.owner, note.repo, note.number);
       });
     });
   } catch (err) {
@@ -164,34 +142,19 @@ async function showNoteList(): Promise<void> {
   }
 }
 
-async function openNote(number: number): Promise<void> {
+async function openNote(owner: string, repo: string, number: number): Promise<void> {
   if (!state) return;
 
   app.innerHTML = `<div class="editor-screen"><p>Loading note #${number}...</p></div>`;
 
   try {
-    const note = await getNote(state.host, state.token, state.owner, state.repo, number);
-    currentNote = note;
+    const note = await getNote(state.host, state.token, owner, repo, number);
+    currentNote = { ...note, owner, repo };
     originalBody = note.body ?? '';
     originalTitle = note.title;
     renderEditor(note.title, originalBody);
   } catch (err) {
     app.innerHTML = `<div class="editor-screen"><p class="error">Failed to load note: ${err instanceof Error ? err.message : err}</p></div>`;
-  }
-}
-
-async function openNewNote(title: string): Promise<void> {
-  if (!state) return;
-
-  try {
-    showStatus('Creating note...');
-    const note = await createNote(state.host, state.token, state.owner, state.repo, title, '');
-    currentNote = note;
-    originalBody = '';
-    originalTitle = title;
-    renderEditor(title, '');
-  } catch (err) {
-    showStatus(`Failed to create note: ${err instanceof Error ? err.message : err}`, true);
   }
 }
 
@@ -236,10 +199,10 @@ async function handleSave(): Promise<void> {
 
   try {
     showStatus('Saving...');
-    const updated = await updateNote(state.host, state.token, state.owner, state.repo, currentNote.number, data);
+    const updated = await updateNote(state.host, state.token, currentNote.owner, currentNote.repo, currentNote.number, data);
     originalBody = updated.body ?? '';
     originalTitle = updated.title;
-    currentNote = updated;
+    currentNote = { ...updated, owner: currentNote.owner, repo: currentNote.repo };
     showStatus('Saved');
   } catch (err) {
     showStatus(`Save failed: ${err instanceof Error ? err.message : err}`, true);
