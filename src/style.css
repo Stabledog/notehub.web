@@ -168,6 +168,21 @@ thead th {
   background: #313244;
 }
 
+.copy-url-btn {
+  padding: 0.125rem 0.5rem;
+  background: #45475a;
+  border: none;
+  border-radius: 4px;
+  color: #cdd6f4;
+  cursor: pointer;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.copy-url-btn:hover {
+  background: #585b70;
+}
+
 .empty {
   color: #a6adc8;
   padding: 2rem;

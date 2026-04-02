@@ -115,7 +115,7 @@ async function showNoteList(): Promise<void> {
 
     container.innerHTML = `
       <table>
-        <thead><tr><th>Repo</th><th>#</th><th>Title</th><th>Updated</th></tr></thead>
+        <thead><tr><th>Repo</th><th>#</th><th>Title</th><th>Updated</th><th></th></tr></thead>
         <tbody>
           ${notesList.map((n, i) => `
             <tr class="note-row" data-index="${i}">
@@ -123,11 +123,24 @@ async function showNoteList(): Promise<void> {
               <td>${n.number}</td>
               <td>${escapeHtml(n.title)}</td>
               <td>${new Date(n.updated_at).toLocaleDateString()}</td>
+              <td><button class="copy-url-btn" data-url="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" title="Copy issue URL">Copy URL</button></td>
             </tr>
           `).join('')}
         </tbody>
       </table>
     `;
+
+    container.querySelectorAll('.copy-url-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const url = (btn as HTMLElement).dataset.url!;
+        navigator.clipboard.writeText(url).then(() => {
+          const orig = btn.textContent;
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        });
+      });
+    });
 
     container.querySelectorAll('.note-row').forEach(row => {
       row.addEventListener('click', () => {
@@ -165,6 +178,7 @@ function renderEditor(title: string, body: string): void {
         <button id="back-to-list">&larr; Notes</button>
         <input type="text" id="note-title" value="${escapeAttr(title)}" />
         <span id="note-number">${currentNote ? `#${currentNote.number}` : 'new'}</span>
+        ${currentNote ? `<button id="copy-note-url" title="Copy issue URL">Copy URL</button>` : ''}
         <span id="status-msg"></span>
       </header>
       <div id="editor-container"></div>
@@ -174,6 +188,18 @@ function renderEditor(title: string, body: string): void {
   document.getElementById('back-to-list')!.addEventListener('click', () => {
     handleQuit(false);
   });
+
+  const copyBtn = document.getElementById('copy-note-url');
+  if (copyBtn && currentNote) {
+    const url = issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number);
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(url).then(() => {
+        const orig = copyBtn.textContent;
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = orig; }, 1500);
+      });
+    });
+  }
 
   createEditor(document.getElementById('editor-container')!, body, {
     onSave: handleSave,
@@ -233,6 +259,10 @@ function escapeHtml(s: string): string {
   const div = document.createElement('div');
   div.textContent = s;
   return div.innerHTML;
+}
+
+function issueUrl(host: string, owner: string, repo: string, number: number): string {
+  return `https://${host}/${owner}/${repo}/issues/${number}`;
 }
 
 function escapeAttr(s: string): string {
