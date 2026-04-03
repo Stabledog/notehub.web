@@ -95,6 +95,21 @@ export function createEditor(
       EditorView.theme({
         '&': { height: '100%' },
         '.cm-scroller': { overflow: 'auto' },
+        '.cm-vim-panel': {
+          background: '#45475a',
+          color: '#cdd6f4',
+          padding: '2px 6px',
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+          fontSize: '14px',
+        },
+        '.cm-vim-panel input': {
+          background: 'transparent',
+          border: 'none',
+          outline: 'none',
+          color: '#cdd6f4',
+          fontFamily: 'inherit',
+          fontSize: 'inherit',
+        },
       }),
     ],
   });
