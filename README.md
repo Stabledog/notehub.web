@@ -2,13 +2,13 @@
 
 A single-page browser app that uses GitHub Issues as a note-keeping system, with vi keybindings via CodeMirror 6. Zero install, zero backend — just static files and a GitHub PAT.
 
-Hosted on GitHub Pages: `https://bbgithub.dev.bloomberg.com/pages/training-lmatheson4/notehub.web/`
+Works with both github.com and GitHub Enterprise Server (GHES) instances.
 
 ## Quick Start
 
 ```bash
 npm install
-npm run dev        # local dev server at http://localhost:5173
+VITE_BASE=/ npm run dev        # local dev server at http://localhost:5173
 ```
 
 Open the browser, enter your GitHub host and PAT, and start editing. Notes are GitHub Issues labeled `notehub`, discovered across all repos you have access to.
@@ -27,13 +27,14 @@ Full vim mode. The following ex commands are wired to the app:
 ## Deploy to GitHub Pages
 
 ```bash
-npm run build
+VITE_BASE=/notehub.web/ npm run build       # for public GitHub Pages
+VITE_BASE=/pages/user/repo/ npm run build   # for GHES Pages
 npx gh-pages -d dist
 ```
 
 The `gh-pages` package pushes the contents of `dist/` to the `gh-pages` branch. The repo's Pages settings should serve from that branch.
 
-**Important:** The Vite `base` path in `vite.config.ts` must match the Pages URL path. Currently set to `/pages/training-lmatheson4/notehub.web/` for bbgithub GHES.
+**Important:** `VITE_BASE` must match the Pages URL path for your deployment. The build will fail if it is not set.
 
 ## Stack
 

@@ -1,4 +1,4 @@
-const DEFAULT_HOST = 'bbgithub.dev.bloomberg.com';
+const DEFAULT_HOST = 'github.com';
 
 function apiBase(host: string): string {
   if (host === 'github.com') return 'https://api.github.com';
