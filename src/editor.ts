@@ -38,6 +38,7 @@ const clickableLinks = EditorView.domEventHandlers({
 export interface EditorCallbacks {
   onSave: () => Promise<void>;
   onQuit: (force: boolean) => void;
+  onFocusTitle?: () => void;
 }
 
 let editorView: EditorView | null = null;
@@ -64,6 +65,11 @@ export function createEditor(
   });
 
   Vim.map('jk', '<Esc>', 'insert');
+
+  if (callbacks.onFocusTitle) {
+    Vim.defineAction('focusTitle', callbacks.onFocusTitle);
+    Vim.mapCommand('gt', 'action', 'focusTitle', {}, { context: 'normal' });
+  }
 
   // Sync vim registers with the system clipboard so yank/paste work across
   // the browser boundary without needing the "+ register prefix.
@@ -137,6 +143,10 @@ export function getEditorContent(): string {
 
 export function isEditorDirty(original: string): boolean {
   return getEditorContent() !== original;
+}
+
+export function focusEditor(): void {
+  editorView?.focus();
 }
 
 export function destroyEditor(): void {

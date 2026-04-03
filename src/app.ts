@@ -1,5 +1,5 @@
 import { validateToken, searchNotes, getNote, updateNote, createNote, archiveNote, DEFAULT_HOST, type NoteSearchResult } from './github';
-import { createEditor, getEditorContent, isEditorDirty, destroyEditor } from './editor';
+import { createEditor, getEditorContent, isEditorDirty, destroyEditor, focusEditor } from './editor';
 import { hashTarget } from './util';
 
 const LS_TOKEN = 'notehub:token';
@@ -405,9 +405,18 @@ function renderEditor(title: string, body: string): void {
     });
   }
 
+  const titleInput = document.getElementById('note-title') as HTMLInputElement;
+  titleInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' || e.key === 'Enter') {
+      e.preventDefault();
+      focusEditor();
+    }
+  });
+
   createEditor(document.getElementById('editor-container')!, body, {
     onSave: handleSave,
     onQuit: handleQuit,
+    onFocusTitle: () => titleInput.focus(),
   });
 }
 
