@@ -62,7 +62,7 @@ export function listNotes(host: string, token: string, owner: string, repo: stri
 }
 
 export async function searchNotes(host: string, token: string): Promise<NoteSearchResult[]> {
-  const q = encodeURIComponent('label:notehub state:open');
+  const q = encodeURIComponent('is:issue label:notehub state:open');
   const data = await apiFetch<SearchResponse>(
     host, token,
     `/search/issues?q=${q}&sort=updated&order=desc&per_page=100`,
