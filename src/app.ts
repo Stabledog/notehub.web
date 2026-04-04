@@ -48,6 +48,7 @@ let newNoteTarget: { owner: string; repo: string } | null = null;
 
 let originalBody = '';
 let originalTitle = '';
+let justCreatedNote: NoteSearchResult | null = null;
 
 const app = document.getElementById('app')!;
 
@@ -256,6 +257,19 @@ async function showNoteList(): Promise<void> {
 
   try {
     notesList = await searchNotes(state.host, state.token);
+
+    // If we just created a note, the Search API may not have indexed it yet.
+    // Merge it into the results if missing.
+    if (justCreatedNote) {
+      const jc = justCreatedNote;
+      justCreatedNote = null;
+      const alreadyPresent = notesList.some(
+        n => n.owner === jc.owner && n.repo === jc.repo && n.number === jc.number
+      );
+      if (!alreadyPresent) {
+        notesList.unshift(jc);
+      }
+    }
 
     // Pin the default issue to the top (if configured)
     const pinned = getPinnedIssue();
@@ -530,6 +544,7 @@ async function handleSave(): Promise<void> {
       showStatus('Creating...');
       const created = await createNote(state.host, state.token, newNoteTarget.owner, newNoteTarget.repo, title, body);
       currentNote = { ...created, owner: newNoteTarget.owner, repo: newNoteTarget.repo };
+      justCreatedNote = currentNote;
       newNoteTarget = null;
       originalBody = created.body ?? '';
       originalTitle = created.title;
