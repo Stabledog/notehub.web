@@ -19,13 +19,10 @@ npx tsc --noEmit                                   # typecheck only
 ## Deploy
 
 ```bash
-VITE_BASE=/your-base-path/ npm run build
-npx gh-pages -d dist
+./build-and-deploy.sh
 ```
 
-This pushes `dist/` to the `gh-pages` branch. The repo's GitHub Pages serves from that branch.
-
-`VITE_BASE` must match the Pages URL path for your deployment. The build will fail if it is not set.
+The script auto-detects the Pages base path from the git remote URL (`/{repo}/` for github.com, `/pages/{owner}/{repo}/` for GHES). It installs deps, builds, and pushes `dist/` to the `gh-pages` branch.
 
 ## Architecture
 
