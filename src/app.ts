@@ -4,6 +4,8 @@ import { hashTarget } from './util';
 
 const LS_TOKEN = 'notehub:token';
 const LS_HOST = 'notehub:host';
+const LS_DEFAULT_REPO = 'notehub:defaultRepo';
+const LS_PINNED_ISSUE = 'notehub:pinnedIssue';
 
 interface AppState {
   host: string;
@@ -11,10 +13,34 @@ interface AppState {
   username: string;
 }
 
+interface PinnedIssue {
+  owner: string;
+  repo: string;
+  number: number;
+}
+
 const DEFAULT_NEW_TITLE = '\ud83c\udfab New note';
 const DEFAULT_NEW_BODY = '# New note';
-const DEFAULT_REPO = 'lmatheson4/notehub.default';
-const PINNED_ISSUE = { owner: 'lmatheson4', repo: 'notehub.default', number: 7 };
+
+function getDefaultRepo(): string | null {
+  return localStorage.getItem(LS_DEFAULT_REPO);
+}
+
+function getPinnedIssue(): PinnedIssue | null {
+  const raw = localStorage.getItem(LS_PINNED_ISSUE);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.owner && parsed.repo && typeof parsed.number === 'number') {
+      return parsed as PinnedIssue;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+function isSetupComplete(): boolean {
+  return getDefaultRepo() !== null;
+}
 
 let state: AppState | null = null;
 let currentNote: NoteSearchResult | null = null;
@@ -33,7 +59,11 @@ export function init(): void {
     validateToken(host, token)
       .then(user => {
         state = { host, token, username: user.login };
-        showNoteList();
+        if (!isSetupComplete()) {
+          showSetup();
+        } else {
+          showNoteList();
+        }
       })
       .catch(() => showAuth());
   } else {
@@ -72,10 +102,65 @@ function showAuth(error?: string): void {
       localStorage.setItem(LS_HOST, host);
       localStorage.setItem(LS_TOKEN, token);
       state = { host, token, username: user.login };
-      showNoteList();
+      if (!isSetupComplete()) {
+        showSetup();
+      } else {
+        showNoteList();
+      }
     } catch (err) {
       showAuth(`Authentication failed: ${err instanceof Error ? err.message : err}`);
     }
+  });
+}
+
+function showSetup(error?: string): void {
+  destroyEditor();
+  if (!state) return;
+
+  const suggestedRepo = `${state.username}/notehub.default`;
+
+  app.innerHTML = `
+    <div class="auth-screen">
+      <h1>notehub</h1>
+      <p>Welcome, @${state.username}! Configure your default repository for new notes.</p>
+      ${error ? `<div class="error">${error}</div>` : ''}
+      <form id="setup-form">
+        <label>Default Repository
+          <input type="text" id="setup-repo" value="${suggestedRepo}" placeholder="owner/repo" required />
+        </label>
+        <label>Pinned Issue Number <span style="color:#6c7086">(optional)</span>
+          <input type="number" id="setup-pinned" placeholder="e.g. 7" min="1" />
+        </label>
+        <button type="submit">Save &amp; Continue</button>
+      </form>
+    </div>
+  `;
+
+  document.getElementById('setup-form')!.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const repoVal = (document.getElementById('setup-repo') as HTMLInputElement).value.trim();
+    const pinnedVal = (document.getElementById('setup-pinned') as HTMLInputElement).value.trim();
+
+    const parts = repoVal.split('/');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      showSetup('Repository must be in owner/repo format.');
+      return;
+    }
+
+    localStorage.setItem(LS_DEFAULT_REPO, repoVal);
+
+    if (pinnedVal) {
+      const num = parseInt(pinnedVal, 10);
+      if (isNaN(num) || num < 1) {
+        showSetup('Pinned issue must be a positive number.');
+        return;
+      }
+      localStorage.setItem(LS_PINNED_ISSUE, JSON.stringify({ owner: parts[0], repo: parts[1], number: num }));
+    } else {
+      localStorage.removeItem(LS_PINNED_ISSUE);
+    }
+
+    showNoteList();
   });
 }
 
@@ -172,10 +257,13 @@ async function showNoteList(): Promise<void> {
   try {
     notesList = await searchNotes(state.host, state.token);
 
-    // Pin the default issue to the top
-    const isPinned = (n: NoteSearchResult) =>
-      n.owner === PINNED_ISSUE.owner && n.repo === PINNED_ISSUE.repo && n.number === PINNED_ISSUE.number;
-    notesList.sort((a, b) => (isPinned(a) ? -1 : isPinned(b) ? 1 : 0));
+    // Pin the default issue to the top (if configured)
+    const pinned = getPinnedIssue();
+    if (pinned) {
+      const isPinned = (n: NoteSearchResult) =>
+        n.owner === pinned.owner && n.repo === pinned.repo && n.number === pinned.number;
+      notesList.sort((a, b) => (isPinned(a) ? -1 : isPinned(b) ? 1 : 0));
+    }
 
     document.getElementById('new-note')!.addEventListener('click', () => {
       showRepoPicker(notesList);
@@ -271,16 +359,21 @@ function showRepoPicker(notesList: NoteSearchResult[]): void {
 
   // Extract unique owner/repo pairs, sorted with default repo first
   const repoSet = new Map<string, { owner: string; repo: string }>();
-  // Always include the default repo
-  const [defOwner, defRepo] = DEFAULT_REPO.split('/');
-  repoSet.set(DEFAULT_REPO, { owner: defOwner, repo: defRepo });
+  // Always include the default repo if configured
+  const defaultRepo = getDefaultRepo();
+  if (defaultRepo) {
+    const [defOwner, defRepo] = defaultRepo.split('/');
+    repoSet.set(defaultRepo, { owner: defOwner, repo: defRepo });
+  }
   for (const n of notesList) {
     const key = `${n.owner}/${n.repo}`;
     if (!repoSet.has(key)) repoSet.set(key, { owner: n.owner, repo: n.repo });
   }
   const sortedRepos = Array.from(repoSet.entries()).sort((a, b) => {
-    if (a[0] === DEFAULT_REPO) return -1;
-    if (b[0] === DEFAULT_REPO) return 1;
+    if (defaultRepo) {
+      if (a[0] === defaultRepo) return -1;
+      if (b[0] === defaultRepo) return 1;
+    }
     return a[0].localeCompare(b[0]);
   });
 
@@ -468,7 +561,6 @@ async function handleSave(): Promise<void> {
   try {
     showStatus('Saving...');
     const updated = await updateNote(state.host, state.token, currentNote.owner, currentNote.repo, currentNote.number, data);
-
     originalBody = updated.body ?? '';
     originalTitle = updated.title;
     currentNote = { ...updated, owner: currentNote.owner, repo: currentNote.repo };
