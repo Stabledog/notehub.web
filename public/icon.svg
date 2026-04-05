@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#1e1e2e"/>
+  <rect x="96" y="80" width="320" height="352" rx="24" fill="#313244"/>
+  <!-- lines representing notes -->
+  <rect x="152" y="152" width="208" height="16" rx="8" fill="#89b4fa"/>
+  <rect x="152" y="200" width="176" height="16" rx="8" fill="#a6adc8"/>
+  <rect x="152" y="248" width="192" height="16" rx="8" fill="#a6adc8"/>
+  <rect x="152" y="296" width="144" height="16" rx="8" fill="#a6adc8"/>
+  <!-- hub dot -->
+  <circle cx="352" cy="368" r="32" fill="#f38ba8"/>
+</svg>
