@@ -688,7 +688,7 @@ function issueUrl(host: string, owner: string, repo: string, number: number): st
 }
 
 function hashTarget(url: string): string {
-  return veditor ? hashTarget(url) : '_blank';
+  return veditor ? veditor.hashTarget(url) : '_blank';
 }
 
 function escapeAttr(s: string): string {
