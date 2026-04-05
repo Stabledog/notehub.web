@@ -26,18 +26,19 @@ The script auto-detects the Pages base path from the git remote URL (`/{repo}/` 
 
 ## Architecture
 
-Four source files in `src/`, no framework, vanilla DOM:
+Three source files in `src/`, no framework, vanilla DOM:
 
 - **`main.ts`** — entry point, imports CSS and calls `init()`
-- **`app.ts`** — app state machine with three screens (auth, note list, editor). Manages localStorage persistence for host/token/owner/repo. All GitHub API calls are threaded through a `host` parameter.
-- **`editor.ts`** — creates CodeMirror 6 instance with vim mode, markdown highlighting, one-dark theme. Registers `:w`, `:q`, `:q!`, `:wq` via `Vim.defineEx()`. Exposes `createEditor()`, `getEditorContent()`, `isEditorDirty()`, `destroyEditor()`.
+- **`app.ts`** — app state machine with three screens (auth, note list, editor). Manages localStorage persistence for host/token/owner/repo. All GitHub API calls are threaded through a `host` parameter. Dynamically imports the editor component from veditor.web at runtime.
 - **`github.ts`** — GitHub REST API client. Supports both GHES (`https://{host}/api/v3`) and github.com (`https://api.github.com`). Default host: `github.com`. Functions: `validateToken`, `listNotes`, `getNote`, `updateNote`, `createNote`, `ensureLabel`.
+
+The editor (CodeMirror 6 + vim mode) is provided by **veditor.web** (`Stabledog/veditor.web`), a shared component also used by metabrowse. It is loaded at runtime from GitHub Pages via dynamic `import()`. The base URL defaults to `https://stabledog.github.io/veditor.web` and can be overridden via the `VITE_VEDITOR_BASE` environment variable (required for GHES deployments).
 
 ## Key Patterns
 
 - **No framework** — all UI is innerHTML + addEventListener. Three "screens" managed by functions: `showAuth()`, `showNoteList()`, `renderEditor()`.
 - **Configurable GitHub host** — defaults to github.com, supports any GHES instance. The host is configurable on the auth screen and stored in localStorage.
-- **Vim ex commands as app actions** — `:w` triggers a PATCH to save, `:q` navigates back to the list, `:wq` saves then navigates. These are registered via `Vim.defineEx()` in `editor.ts`.
+- **Vim ex commands as app actions** — `:w` triggers a PATCH to save, `:q` navigates back to the list, `:wq` saves then navigates. These are registered by veditor.web via the `onSave`/`onQuit` callbacks. The `gt` normal-mode mapping (focus title input) is passed via `normalMappings` in `VEditorOptions`.
 - **All API functions take `host` as the first parameter** — this threads through from `AppState.host` in `app.ts`.
 
 ## Git & Remote
