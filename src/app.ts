@@ -537,7 +537,7 @@ function renderEditor(title: string, body: string): void {
   `;
 
   document.getElementById('back-to-list')!.addEventListener('click', () => {
-    handleQuit(false);
+    veditor.executeExCommand('q');
   });
 
   const copyBtn = document.getElementById('copy-note-url');
@@ -561,7 +561,13 @@ function renderEditor(title: string, body: string): void {
 
   veditor.createEditor(document.getElementById('editor-container')!, body, {
     onSave: handleSave,
-    onQuit: handleQuit,
+    onQuit: () => showNoteList(),
+    onCloseRequest: () => {
+      const titleEl = document.getElementById('note-title') as HTMLInputElement | null;
+      if (titleEl && titleEl.value.trim() !== originalTitle) {
+        veditor.markDirty();
+      }
+    },
   }, {
     storagePrefix: 'notehub',
     normalMappings: {
@@ -626,46 +632,6 @@ async function handleSave(): Promise<void> {
   } catch (err) {
     showStatus(`Save failed: ${err instanceof Error ? err.message : err}`, true);
   }
-}
-
-function handleQuit(force: boolean): void {
-  const titleEl = document.getElementById('note-title') as HTMLInputElement | null;
-  const titleChanged = titleEl ? titleEl.value.trim() !== originalTitle : false;
-
-  if (!force && (veditor.isEditorDirty(originalBody) || titleChanged)) {
-    showConfirmBar('Unsaved changes. Discard?', () => showNoteList());
-    return;
-  }
-  showNoteList();
-}
-
-function showConfirmBar(message: string, onConfirm: () => void): void {
-  // Remove any existing confirm bar
-  document.getElementById('confirm-bar')?.remove();
-
-  const bar = document.createElement('div');
-  bar.id = 'confirm-bar';
-  bar.innerHTML = `
-    <span>${message}</span>
-    <span class="confirm-hint">[y]es / [n]o</span>
-    <button class="confirm-btn confirm-yes">Yes</button>
-    <button class="confirm-btn confirm-no">No</button>
-  `;
-
-  const header = document.querySelector('.editor-screen header');
-  if (!header) return;
-  header.after(bar);
-
-  const dismiss = () => { bar.remove(); document.removeEventListener('keydown', onKey, true); };
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === 'y' || e.key === 'Enter') { e.stopPropagation(); e.preventDefault(); dismiss(); onConfirm(); }
-    else if (e.key === 'n' || e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); dismiss(); }
-  };
-  // Use capture phase so we intercept before CodeMirror consumes the keystroke
-  document.addEventListener('keydown', onKey, true);
-
-  bar.querySelector('.confirm-yes')!.addEventListener('click', () => { dismiss(); onConfirm(); });
-  bar.querySelector('.confirm-no')!.addEventListener('click', () => { dismiss(); });
 }
 
 function showStatus(msg: string, isError = false): void {

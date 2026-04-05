@@ -2,7 +2,8 @@
 
 export interface VEditorCallbacks {
   onSave: () => Promise<void>;
-  onQuit: (force: boolean) => void;
+  onQuit: () => void;
+  onCloseRequest?: () => boolean | void;
 }
 
 export interface VEditorOptions {
@@ -22,6 +23,7 @@ export function createEditor(
 
 export function getEditorContent(): string;
 export function isEditorDirty(original: string): boolean;
+export function markDirty(): void;
 export function focusEditor(): void;
 export function destroyEditor(): void;
 export function exitInsertMode(): void;

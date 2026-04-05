@@ -314,39 +314,6 @@ thead th {
   color: #f38ba8;
 }
 
-#confirm-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 1rem;
-  background: #45475a;
-  color: #f38ba8;
-  font-size: 0.875rem;
-}
-
-.confirm-hint {
-  color: #a6adc8;
-}
-
-.confirm-btn {
-  padding: 0.2rem 0.6rem;
-  border: 1px solid #a6adc8;
-  border-radius: 3px;
-  background: transparent;
-  color: #cdd6f4;
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-
-.confirm-btn:hover {
-  background: #585b70;
-}
-
-.confirm-yes {
-  border-color: #f38ba8;
-  color: #f38ba8;
-}
-
 /* Repo picker modal */
 #repo-picker-overlay {
   position: fixed;

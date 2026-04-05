@@ -25,3 +25,4 @@ dist-ssr
 *.sw?
 tmp
 .claude
+.build-stamp
