@@ -648,18 +648,24 @@ function showConfirmBar(message: string, onConfirm: () => void): void {
   bar.innerHTML = `
     <span>${message}</span>
     <span class="confirm-hint">[y]es / [n]o</span>
+    <button class="confirm-btn confirm-yes">Yes</button>
+    <button class="confirm-btn confirm-no">No</button>
   `;
 
   const header = document.querySelector('.editor-screen header');
   if (!header) return;
   header.after(bar);
 
-  const dismiss = () => { bar.remove(); document.removeEventListener('keydown', onKey); };
+  const dismiss = () => { bar.remove(); document.removeEventListener('keydown', onKey, true); };
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === 'y' || e.key === 'Enter') { dismiss(); onConfirm(); }
-    else if (e.key === 'n' || e.key === 'Escape') { dismiss(); }
+    if (e.key === 'y' || e.key === 'Enter') { e.stopPropagation(); e.preventDefault(); dismiss(); onConfirm(); }
+    else if (e.key === 'n' || e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); dismiss(); }
   };
-  document.addEventListener('keydown', onKey);
+  // Use capture phase so we intercept before CodeMirror consumes the keystroke
+  document.addEventListener('keydown', onKey, true);
+
+  bar.querySelector('.confirm-yes')!.addEventListener('click', () => { dismiss(); onConfirm(); });
+  bar.querySelector('.confirm-no')!.addEventListener('click', () => { dismiss(); });
 }
 
 function showStatus(msg: string, isError = false): void {
