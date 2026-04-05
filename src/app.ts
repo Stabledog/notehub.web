@@ -365,7 +365,7 @@ async function showNoteList(): Promise<void> {
         menu.querySelector('.context-github-btn')!.addEventListener('click', (ev) => {
           ev.stopPropagation();
           closeMenu();
-          window.open(issueUrl(state!.host, note.owner, note.repo, note.number), '_blank');
+          window.open(issueUrl(state!.host, note.owner, note.repo, note.number) + '#new_comment_field', '_blank');
         });
 
         menu.querySelector('.context-delete-btn')!.addEventListener('click', async (ev) => {
@@ -388,7 +388,7 @@ async function showNoteList(): Promise<void> {
         const idx = parseInt(row.getAttribute('data-index')!, 10);
         const note = notesList[idx];
         if (isMobile) {
-          window.open(issueUrl(state!.host, note.owner, note.repo, note.number), '_blank');
+          window.open(issueUrl(state!.host, note.owner, note.repo, note.number) + '#new_comment_field', '_blank');
         } else {
           openNote(note.owner, note.repo, note.number);
         }
