@@ -474,13 +474,3 @@ thead th {
 .context-delete-btn:hover {
   background: #45475a;
 }
-
-/* CodeMirror overrides */
-.cm-editor {
-  height: 100%;
-  font-size: 14px;
-}
-
-.cm-editor .cm-content {
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
-}

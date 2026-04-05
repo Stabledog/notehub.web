@@ -1,8 +1,12 @@
 import { validateToken, searchNotes, getNote, updateNote, createNote, archiveNote, DEFAULT_HOST, type NoteSearchResult } from './github';
-import { createEditor, getEditorContent, isEditorDirty, destroyEditor, focusEditor } from './editor';
-import { hashTarget } from './util';
 
 const LS_TOKEN = 'notehub:token';
+
+// veditor base URL — override via VITE_VEDITOR_BASE for GHES or local dev.
+const VEDITOR_BASE = import.meta.env.VITE_VEDITOR_BASE || 'https://stabledog.github.io/veditor.web';
+
+// veditor API — populated by init() before use.
+let veditor: typeof import('./veditor');
 const LS_HOST = 'notehub:host';
 const LS_DEFAULT_REPO = 'notehub:defaultRepo';
 const LS_PINNED_ISSUE = 'notehub:pinnedIssue';
@@ -52,7 +56,20 @@ let justCreatedNote: NoteSearchResult | null = null;
 
 const app = document.getElementById('app')!;
 
-export function init(): void {
+export async function init(): Promise<void> {
+  // Load veditor CSS + JS from Pages CDN
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = `${VEDITOR_BASE}/veditor.css`;
+  document.head.appendChild(link);
+
+  try {
+    veditor = await import(/* @vite-ignore */ `${VEDITOR_BASE}/veditor.js`);
+  } catch (err) {
+    app.innerHTML = `<div class="auth-screen"><h1>notehub</h1><p class="error">Failed to load editor from ${VEDITOR_BASE}/veditor.js: ${err instanceof Error ? err.message : err}</p></div>`;
+    return;
+  }
+
   const token = localStorage.getItem(LS_TOKEN);
   const host = localStorage.getItem(LS_HOST) ?? DEFAULT_HOST;
 
@@ -73,7 +90,7 @@ export function init(): void {
 }
 
 function showAuth(error?: string): void {
-  destroyEditor();
+  veditor.destroyEditor();
   const savedHost = localStorage.getItem(LS_HOST) ?? DEFAULT_HOST;
 
   app.innerHTML = `
@@ -115,7 +132,7 @@ function showAuth(error?: string): void {
 }
 
 function showSetup(error?: string): void {
-  destroyEditor();
+  veditor.destroyEditor();
   if (!state) return;
 
   const suggestedRepo = `${state.username}/notehub.default`;
@@ -168,7 +185,7 @@ function showSetup(error?: string): void {
 let cleanupListKeys: (() => void) | null = null;
 
 async function showNoteList(): Promise<void> {
-  destroyEditor();
+  veditor.destroyEditor();
   cleanupListKeys?.();
   cleanupListKeys = null;
   currentNote = null;
@@ -294,7 +311,7 @@ async function showNoteList(): Promise<void> {
           ${notesList.map((n, i) => `
             <tr class="note-row" data-index="${i}">
               <td>${escapeHtml(n.owner)}/${escapeHtml(n.repo)}</td>
-              <td><a href="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" target="${hashTarget(issueUrl(state!.host, n.owner, n.repo, n.number))}" class="issue-link" onclick="event.stopPropagation()">${n.number}</a></td>
+              <td><a href="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" target="${veditor.hashTarget(issueUrl(state!.host, n.owner, n.repo, n.number))}" class="issue-link" onclick="event.stopPropagation()">${n.number}</a></td>
               <td>${escapeHtml(n.title)}</td>
               <td>${new Date(n.updated_at).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}</td>
               <td><button class="copy-url-btn" data-url="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" title="Copy issue URL">${clipboardIcon}</button></td>
@@ -489,7 +506,7 @@ function renderEditor(title: string, body: string): void {
       <header>
         <button id="back-to-list" title="Back to notes">&larr;</button>
         <input type="text" id="note-title" value="${escapeAttr(title)}" />
-        <span id="note-number">${currentNote ? `<a href="${escapeAttr(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>` : 'Title'}</span>
+        <span id="note-number">${currentNote ? `<a href="${escapeAttr(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${veditor.hashTarget(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>` : 'Title'}</span>
         ${currentNote ? `<button id="copy-note-url" class="copy-url-btn" title="Copy issue URL">${clipboardIcon}</button>` : ''}
         <span id="status-msg"></span>
       </header>
@@ -516,21 +533,25 @@ function renderEditor(title: string, body: string): void {
   titleInput.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' || e.key === 'Enter') {
       e.preventDefault();
-      focusEditor();
+      veditor.focusEditor();
     }
   });
 
-  createEditor(document.getElementById('editor-container')!, body, {
+  veditor.createEditor(document.getElementById('editor-container')!, body, {
     onSave: handleSave,
     onQuit: handleQuit,
-    onFocusTitle: () => titleInput.focus(),
+  }, {
+    storagePrefix: 'notehub',
+    normalMappings: {
+      'gt': () => titleInput.focus(),
+    },
   });
 }
 
 async function handleSave(): Promise<void> {
   if (!state) return;
 
-  const body = getEditorContent();
+  const body = veditor.getEditorContent();
   const titleEl = document.getElementById('note-title') as HTMLInputElement;
   const title = titleEl.value.trim();
 
@@ -551,7 +572,7 @@ async function handleSave(): Promise<void> {
       // Update header to show issue number
       const numEl = document.getElementById('note-number');
       if (numEl) {
-        numEl.innerHTML = `<a href="${escapeAttr(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>`;
+        numEl.innerHTML = `<a href="${escapeAttr(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${veditor.hashTarget(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>`;
       }
 
       showStatus('Created');
@@ -589,7 +610,7 @@ function handleQuit(force: boolean): void {
   const titleEl = document.getElementById('note-title') as HTMLInputElement | null;
   const titleChanged = titleEl ? titleEl.value.trim() !== originalTitle : false;
 
-  if (!force && (isEditorDirty(originalBody) || titleChanged)) {
+  if (!force && (veditor.isEditorDirty(originalBody) || titleChanged)) {
     showConfirmBar('Unsaved changes. Discard?', () => showNoteList());
     return;
   }
