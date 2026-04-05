@@ -562,11 +562,9 @@ function renderEditor(title: string, body: string): void {
   veditor.createEditor(document.getElementById('editor-container')!, body, {
     onSave: handleSave,
     onQuit: () => showNoteList(),
-    onCloseRequest: () => {
+    isAppDirty: () => {
       const titleEl = document.getElementById('note-title') as HTMLInputElement | null;
-      if (titleEl && titleEl.value.trim() !== originalTitle) {
-        veditor.markDirty();
-      }
+      return !!(titleEl && titleEl.value.trim() !== originalTitle);
     },
   }, {
     storagePrefix: 'notehub',
