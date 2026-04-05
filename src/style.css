@@ -456,6 +456,7 @@ thead th {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
+.context-github-btn,
 .context-delete-btn {
   display: flex;
   align-items: center;
@@ -465,12 +466,15 @@ thead th {
   background: transparent;
   border: none;
   border-radius: 4px;
-  color: #f38ba8;
   cursor: pointer;
   font-size: 0.8125rem;
   white-space: nowrap;
 }
 
+.context-github-btn { color: #cdd6f4; }
+.context-delete-btn { color: #f38ba8; }
+
+.context-github-btn:hover,
 .context-delete-btn:hover {
   background: #45475a;
 }

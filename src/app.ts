@@ -2,10 +2,13 @@ import { validateToken, searchNotes, getNote, updateNote, createNote, archiveNot
 
 const LS_TOKEN = 'notehub:token';
 
+// Touch device detection — used to skip veditor and open GitHub's editor instead
+const isMobile = window.matchMedia('(pointer: coarse)').matches;
+
 // veditor base URL — override via VITE_VEDITOR_BASE for GHES or local dev.
 const VEDITOR_BASE = import.meta.env.VITE_VEDITOR_BASE || 'https://stabledog.github.io/veditor.web';
 
-// veditor API — populated by init() before use.
+// veditor API — populated by init() before use (skipped on mobile).
 let veditor: typeof import('./veditor');
 const LS_HOST = 'notehub:host';
 const LS_DEFAULT_REPO = 'notehub:defaultRepo';
@@ -57,17 +60,19 @@ let justCreatedNote: NoteSearchResult | null = null;
 const app = document.getElementById('app')!;
 
 export async function init(): Promise<void> {
-  // Load veditor CSS + JS from Pages CDN
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = `${VEDITOR_BASE}/veditor.css`;
-  document.head.appendChild(link);
+  // Load veditor CSS + JS from Pages CDN (skip on mobile — use GitHub's editor instead)
+  if (!isMobile) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = `${VEDITOR_BASE}/veditor.css`;
+    document.head.appendChild(link);
 
-  try {
-    veditor = await import(/* @vite-ignore */ `${VEDITOR_BASE}/veditor.js`);
-  } catch (err) {
-    app.innerHTML = `<div class="auth-screen"><h1>notehub</h1><p class="error">Failed to load editor from ${VEDITOR_BASE}/veditor.js: ${err instanceof Error ? err.message : err}</p></div>`;
-    return;
+    try {
+      veditor = await import(/* @vite-ignore */ `${VEDITOR_BASE}/veditor.js`);
+    } catch (err) {
+      app.innerHTML = `<div class="auth-screen"><h1>notehub</h1><p class="error">Failed to load editor from ${VEDITOR_BASE}/veditor.js: ${err instanceof Error ? err.message : err}</p></div>`;
+      return;
+    }
   }
 
   const token = localStorage.getItem(LS_TOKEN);
@@ -90,7 +95,7 @@ export async function init(): Promise<void> {
 }
 
 function showAuth(error?: string): void {
-  veditor.destroyEditor();
+  veditor?.destroyEditor();
   const savedHost = localStorage.getItem(LS_HOST) ?? DEFAULT_HOST;
 
   app.innerHTML = `
@@ -132,7 +137,7 @@ function showAuth(error?: string): void {
 }
 
 function showSetup(error?: string): void {
-  veditor.destroyEditor();
+  veditor?.destroyEditor();
   if (!state) return;
 
   const suggestedRepo = `${state.username}/notehub.default`;
@@ -185,7 +190,7 @@ function showSetup(error?: string): void {
 let cleanupListKeys: (() => void) | null = null;
 
 async function showNoteList(): Promise<void> {
-  veditor.destroyEditor();
+  veditor?.destroyEditor();
   cleanupListKeys?.();
   cleanupListKeys = null;
   currentNote = null;
@@ -311,7 +316,7 @@ async function showNoteList(): Promise<void> {
           ${notesList.map((n, i) => `
             <tr class="note-row" data-index="${i}">
               <td>${escapeHtml(n.owner)}/${escapeHtml(n.repo)}</td>
-              <td><a href="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" target="${veditor.hashTarget(issueUrl(state!.host, n.owner, n.repo, n.number))}" class="issue-link" onclick="event.stopPropagation()">${n.number}</a></td>
+              <td><a href="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" target="${hashTarget(issueUrl(state!.host, n.owner, n.repo, n.number))}" class="issue-link" onclick="event.stopPropagation()">${n.number}</a></td>
               <td>${escapeHtml(n.title)}</td>
               <td>${new Date(n.updated_at).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}</td>
               <td><button class="copy-url-btn" data-url="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" title="Copy issue URL">${clipboardIcon}</button></td>
@@ -345,7 +350,10 @@ async function showNoteList(): Promise<void> {
 
         const menu = document.createElement('div');
         menu.className = 'note-context-menu';
-        menu.innerHTML = `<button class="context-delete-btn">${xIcon} Delete</button>`;
+        menu.innerHTML = `
+          <button class="context-github-btn">${externalIcon} Edit on GitHub</button>
+          <button class="context-delete-btn">${xIcon} Delete</button>
+        `;
         menu.style.top = `${rect.bottom + 4}px`;
         menu.style.left = `${rect.right}px`;
         document.body.appendChild(menu);
@@ -353,6 +361,12 @@ async function showNoteList(): Promise<void> {
         const closeMenu = () => { menu.remove(); document.removeEventListener('click', closeMenu); };
         // Close on next click anywhere
         setTimeout(() => document.addEventListener('click', closeMenu), 0);
+
+        menu.querySelector('.context-github-btn')!.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          closeMenu();
+          window.open(issueUrl(state!.host, note.owner, note.repo, note.number), '_blank');
+        });
 
         menu.querySelector('.context-delete-btn')!.addEventListener('click', async (ev) => {
           ev.stopPropagation();
@@ -373,7 +387,11 @@ async function showNoteList(): Promise<void> {
       row.addEventListener('click', () => {
         const idx = parseInt(row.getAttribute('data-index')!, 10);
         const note = notesList[idx];
-        openNote(note.owner, note.repo, note.number);
+        if (isMobile) {
+          window.open(issueUrl(state!.host, note.owner, note.repo, note.number), '_blank');
+        } else {
+          openNote(note.owner, note.repo, note.number);
+        }
       });
     });
 
@@ -474,6 +492,10 @@ function showRepoPicker(notesList: NoteSearchResult[]): void {
 }
 
 function openNewNote(owner: string, repo: string): void {
+  if (isMobile) {
+    window.open(`https://${state!.host}/${owner}/${repo}/issues/new`, '_blank');
+    return;
+  }
   newNoteTarget = { owner, repo };
   currentNote = null;
   originalBody = DEFAULT_NEW_BODY;
@@ -506,7 +528,7 @@ function renderEditor(title: string, body: string): void {
       <header>
         <button id="back-to-list" title="Back to notes">&larr;</button>
         <input type="text" id="note-title" value="${escapeAttr(title)}" />
-        <span id="note-number">${currentNote ? `<a href="${escapeAttr(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${veditor.hashTarget(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>` : 'Title'}</span>
+        <span id="note-number">${currentNote ? `<a href="${escapeAttr(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>` : 'Title'}</span>
         ${currentNote ? `<button id="copy-note-url" class="copy-url-btn" title="Copy issue URL">${clipboardIcon}</button>` : ''}
         <span id="status-msg"></span>
       </header>
@@ -572,7 +594,7 @@ async function handleSave(): Promise<void> {
       // Update header to show issue number
       const numEl = document.getElementById('note-number');
       if (numEl) {
-        numEl.innerHTML = `<a href="${escapeAttr(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${veditor.hashTarget(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>`;
+        numEl.innerHTML = `<a href="${escapeAttr(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>`;
       }
 
       showStatus('Created');
@@ -659,9 +681,14 @@ function escapeHtml(s: string): string {
 const clipboardIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const checkIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 const xIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+const externalIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
 
 function issueUrl(host: string, owner: string, repo: string, number: number): string {
   return `https://${host}/${owner}/${repo}/issues/${number}`;
+}
+
+function hashTarget(url: string): string {
+  return veditor ? hashTarget(url) : '_blank';
 }
 
 function escapeAttr(s: string): string {
