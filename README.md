@@ -26,14 +26,22 @@ Full vim mode. The following ex commands are wired to the app:
 
 ## Deploy to GitHub Pages
 
+From the parent workspace:
+
 ```bash
-./build-and-deploy.sh
+make deploy-notehub
 ```
 
-That's it. The script detects the Pages base path from the git remote URL, installs deps, builds, and pushes `dist/` to the `gh-pages` branch.
+Or manually with required environment variables:
 
-- Public github.com remotes get base path `/{repo}/`
-- GHES remotes get base path `/pages/{owner}/{repo}/`
+```bash
+VITE_BASE=/pages/owner/notehub.web/ \
+VITE_VEDITOR_BASE=https://ghes-host/pages/owner/veditor.web/ \
+npm run build
+npx gh-pages -d dist
+```
+
+On the GHES buildserver, pushing to `main` triggers an automatic build and deploy.
 
 ## Stack
 

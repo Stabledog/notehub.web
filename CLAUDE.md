@@ -18,11 +18,13 @@ npx tsc --noEmit                                   # typecheck only
 
 ## Deploy
 
+Deployment is handled by the parent workspace. From the workspace root:
+
 ```bash
-./build-and-deploy.sh
+make deploy-notehub      # builds with GHES paths, pushes dist/ to gh-pages
 ```
 
-The script auto-detects the Pages base path from the git remote URL (`/{repo}/` for github.com, `/pages/{owner}/{repo}/` for GHES). It installs deps, builds, and pushes `dist/` to the `gh-pages` branch.
+On the GHES buildserver, pushing to `main` triggers an automatic build and deploy via the webhook server. Both `VITE_BASE` and `VITE_VEDITOR_BASE` are required and supplied by the parent (Makefile or buildserver config).
 
 ## Architecture
 
@@ -32,7 +34,7 @@ Three source files in `src/`, no framework, vanilla DOM:
 - **`app.ts`** — app state machine with three screens (auth, note list, editor). Manages localStorage persistence for host/token/owner/repo. All GitHub API calls are threaded through a `host` parameter. Dynamically imports the editor component from veditor.web at runtime.
 - **`github.ts`** — GitHub REST API client. Supports both GHES (`https://{host}/api/v3`) and github.com (`https://api.github.com`). Default host: `github.com`. Functions: `validateToken`, `listNotes`, `getNote`, `updateNote`, `createNote`, `ensureLabel`.
 
-The editor (CodeMirror 6 + vim mode) is provided by **veditor.web** (`Stabledog/veditor.web`), a shared component also used by metabrowse. It is loaded at runtime from GitHub Pages via dynamic `import()`. The base URL defaults to `https://stabledog.github.io/veditor.web` and can be overridden via the `VITE_VEDITOR_BASE` environment variable (required for GHES deployments).
+The editor (CodeMirror 6 + vim mode) is provided by **veditor.web** (`Stabledog/veditor.web`), a shared component also used by metabrowse. It is loaded at runtime from GitHub Pages via dynamic `import()`. The base URL is set at build time via the `VITE_VEDITOR_BASE` environment variable (defaults to `https://stabledog.github.io/veditor.web` for public builds; must be overridden for GHES). veditor.web must be deployed to gh-pages before notehub.web can function.
 
 ## Key Patterns
 
