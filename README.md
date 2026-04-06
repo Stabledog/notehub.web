@@ -2,6 +2,7 @@
 
 A single-page browser app that uses GitHub Issues as a note-keeping system, with vi keybindings via CodeMirror 6. Zero install, zero backend — just static files and a GitHub PAT.
 
+
 Works with both github.com and GitHub Enterprise Server (GHES) instances.
 
 ## Quick Start
