@@ -240,9 +240,9 @@ async function showNoteList(): Promise<void> {
   }
 
   const onListKey = (e: KeyboardEvent) => {
-    // Ignore if typing in an input, search is active, or overlay is open
+    // Ignore if typing in an input, or overlay is open
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-    if (searchActive) return;
+    if (searchInputFocused) return; // let the search input handle its own keys
     if (document.getElementById('repo-picker-overlay')) return;
 
     if (e.key === 'n') {
@@ -270,6 +270,9 @@ async function showNoteList(): Promise<void> {
       if (rows.length > 0) {
         (rows[selectedIndex] as HTMLElement).click();
       }
+    } else if (e.key === 'Escape' && searchActive) {
+      e.preventDefault();
+      dismissSearch();
     } else if (e.key === '/') {
       e.preventDefault();
       showSearchBar();
@@ -281,6 +284,7 @@ async function showNoteList(): Promise<void> {
   // --- Federated search ---
   let searchBarHandle: ReturnType<typeof import('./veditor').createVimInput> | null = null;
   let searchActive = false;
+  let searchInputFocused = false; // true only while the search input itself has keyboard focus
   let regexMode = false;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let fullTableHtml = ''; // stashed when search activates
@@ -294,6 +298,7 @@ async function showNoteList(): Promise<void> {
   function showSearchBar(): void {
     if (searchActive) return;
     searchActive = true;
+    searchInputFocused = true;
 
     // Stash the current table so we can restore on dismiss
     fullTableHtml = container.innerHTML;
@@ -312,6 +317,11 @@ async function showNoteList(): Promise<void> {
     // Insert before the notes container
     container.parentElement!.insertBefore(bar, container);
 
+    // Track whether the search input has keyboard focus so onListKey knows
+    // whether to handle j/k/Enter (list mode) or stay hands-off (input mode).
+    bar.addEventListener('focusin', () => { searchInputFocused = true; });
+    bar.addEventListener('focusout', () => { searchInputFocused = false; });
+
     // Create vim input for the search field
     searchBarHandle = veditor.createVimInput(
       document.getElementById('search-input-container')!,
@@ -324,11 +334,9 @@ async function showNoteList(): Promise<void> {
           debounceTimer = setTimeout(() => runSearch(value), 150);
         },
         onEnter: () => {
-          // Open the selected search result
-          const rows = container.querySelectorAll('.note-row');
-          if (rows.length > 0) {
-            (rows[selectedIndex] as HTMLElement).click();
-          }
+          // Move focus from the search input to the list so j/k/Enter work there.
+          // The search bar stays visible; Escape dismisses it.
+          (document.activeElement as HTMLElement)?.blur();
         },
       },
     );
@@ -343,7 +351,7 @@ async function showNoteList(): Promise<void> {
       if (searchBarHandle) runSearch(searchBarHandle.getValue());
     });
 
-    // Override j/k/Ctrl+R while search bar is focused
+    // Ctrl+R toggles regex while search bar is focused
     bar.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'r' && e.ctrlKey) {
         e.preventDefault();
@@ -362,6 +370,7 @@ async function showNoteList(): Promise<void> {
   function dismissSearch(): void {
     if (!searchActive) return;
     searchActive = false;
+    searchInputFocused = false;
 
     if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
     searchBarHandle?.destroy();
