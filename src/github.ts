@@ -187,6 +187,27 @@ export async function uploadAttachment(
   return res.content;
 }
 
+export async function fetchAttachmentBlob(
+  host: string, token: string, owner: string, repo: string, path: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(
+    `${apiBase(host)}/repos/${owner}/${repo}/contents/${path}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github.raw+json',
+      },
+    },
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GitHub API ${res.status}: ${text}`);
+  }
+  const blob = await res.blob();
+  const filename = path.split('/').pop()!;
+  return { blob, filename };
+}
+
 export async function deleteAttachment(
   host: string, token: string, owner: string, repo: string,
   path: string, sha: string,

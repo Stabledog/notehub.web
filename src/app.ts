@@ -1,4 +1,4 @@
-import { validateToken, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentCounts, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
+import { validateToken, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentBlob, fetchAttachmentCounts, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
 
 
 const LS_TOKEN = 'notehub:token';
@@ -1034,7 +1034,7 @@ async function openAttachmentPanel(): Promise<void> {
       await handleAttachmentUpload();
     } else if (e.key === 'Enter' || e.key === 'd') {
       e.preventDefault();
-      downloadSelectedAttachment();
+      await downloadSelectedAttachment();
     } else if (e.key === 'x') {
       e.preventDefault();
       await deleteSelectedAttachment();
@@ -1156,10 +1156,24 @@ async function handleAttachmentUpload(): Promise<void> {
   input.click();
 }
 
-function downloadSelectedAttachment(): void {
+async function downloadSelectedAttachment(): Promise<void> {
   const a = currentAttachments[selectedAttachmentIndex];
-  if (!a) return;
-  window.open(a.download_url, '_blank');
+  if (!a || !currentNote || !state) return;
+  try {
+    showStatus('Downloading...');
+    const { blob, filename } = await fetchAttachmentBlob(
+      state.host, state.token, currentNote.owner, currentNote.repo, a.path,
+    );
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 100);
+    showStatus('');
+  } catch (err) {
+    showStatus(`Download failed: ${err instanceof Error ? err.message : err}`, true);
+  }
 }
 
 async function deleteSelectedAttachment(): Promise<void> {
