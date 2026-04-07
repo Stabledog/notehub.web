@@ -666,3 +666,10 @@ thead th {
   padding: 0 3px;
   font-size: 0.7rem;
 }
+
+.attachment-count-badge {
+  color: #6c7086;
+  font-size: 0.75rem;
+  margin-left: 0.3rem;
+  white-space: nowrap;
+}

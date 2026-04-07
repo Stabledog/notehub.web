@@ -122,6 +122,38 @@ export interface Attachment {
   download_url: string;
 }
 
+interface DirEntry { name: string; type: string; }
+
+/**
+ * Returns a map of issueNumber → file count for all issues with attachments
+ * in the repo. Makes (1 + N) API calls where N = issues that have attachments.
+ */
+export async function fetchAttachmentCounts(
+  host: string, token: string, owner: string, repo: string,
+): Promise<Map<number, number>> {
+  const counts = new Map<number, number>();
+  let dirs: DirEntry[];
+  try {
+    dirs = await apiFetch<DirEntry[]>(host, token, `/repos/${owner}/${repo}/contents/.notehub/attachments`);
+  } catch {
+    return counts; // 404 = no attachments anywhere
+  }
+  await Promise.all(
+    dirs.filter(d => d.type === 'dir').map(async (dir) => {
+      const issueNum = parseInt(dir.name, 10);
+      if (isNaN(issueNum)) return;
+      try {
+        const files = await apiFetch<DirEntry[]>(
+          host, token, `/repos/${owner}/${repo}/contents/.notehub/attachments/${issueNum}`,
+        );
+        const n = files.filter(f => f.type === 'file').length;
+        if (n > 0) counts.set(issueNum, n);
+      } catch { /* ignore */ }
+    }),
+  );
+  return counts;
+}
+
 export async function listAttachments(
   host: string, token: string, owner: string, repo: string, issueNumber: number,
 ): Promise<Attachment[]> {

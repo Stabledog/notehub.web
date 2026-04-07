@@ -1,4 +1,4 @@
-import { validateToken, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
+import { validateToken, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentCounts, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
 
 
 const LS_TOKEN = 'notehub:token';
@@ -624,7 +624,7 @@ async function showNoteList(): Promise<void> {
             <tr class="note-row" data-index="${i}">
               <td>${escapeHtml(n.owner)}/${escapeHtml(n.repo)}</td>
               <td><a href="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" target="${hashTarget(issueUrl(state!.host, n.owner, n.repo, n.number))}" class="issue-link" onclick="event.stopPropagation()">${n.number}</a></td>
-              <td>${escapeHtml(n.title)}</td>
+              <td>${escapeHtml(n.title)}<span class="attachment-count-badge" data-owner="${escapeAttr(n.owner)}" data-repo="${escapeAttr(n.repo)}" data-issue="${n.number}"></span></td>
               <td>${new Date(n.updated_at).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}</td>
               <td><button class="copy-url-btn" data-url="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" title="Copy issue URL">${clipboardIcon}</button></td>
               <td><button class="context-menu-btn" data-index="${i}" title="More actions">&#x2026;</button></td>
@@ -703,10 +703,29 @@ async function showNoteList(): Promise<void> {
     });
 
     updateSelection();
+
+    // Async: fetch attachment counts per unique repo and populate badges
+    loadAttachmentBadges(notesList).catch(() => {});
   } catch (err) {
     document.getElementById('notes-container')!.innerHTML =
       `<p class="error">Failed to load notes: ${err instanceof Error ? err.message : err}</p>`;
   }
+}
+
+async function loadAttachmentBadges(notes: NoteSearchResult[]): Promise<void> {
+  if (!state) return;
+  const repos = new Map<string, { owner: string; repo: string }>();
+  for (const n of notes) repos.set(`${n.owner}/${n.repo}`, { owner: n.owner, repo: n.repo });
+
+  await Promise.all(Array.from(repos.values()).map(async ({ owner, repo }) => {
+    const counts = await fetchAttachmentCounts(state!.host, state!.token, owner, repo);
+    document.querySelectorAll<HTMLElement>('.attachment-count-badge').forEach(badge => {
+      if (badge.dataset.owner === owner && badge.dataset.repo === repo) {
+        const count = counts.get(parseInt(badge.dataset.issue!, 10));
+        if (count) badge.textContent = ` 📎${count}`;
+      }
+    });
+  }));
 }
 
 function showRepoPicker(notesList: NoteSearchResult[]): void {
@@ -881,6 +900,18 @@ function renderEditor(title: string, body: string): void {
       'ga': () => toggleAttachmentPanel(),
     },
   });
+
+  // Auto-open attachment panel if the note already has attachments
+  if (currentNote) {
+    const note = currentNote;
+    listAttachments(state!.host, state!.token, note.owner, note.repo, note.number)
+      .then(attachments => {
+        if (attachments.length > 0 && document.querySelector('.editor-screen')) {
+          openAttachmentPanel();
+        }
+      })
+      .catch(() => {});
+  }
 }
 
 async function handleSave(): Promise<void> {
@@ -976,7 +1007,7 @@ async function openAttachmentPanel(): Promise<void> {
     </div>
     <div id="attachment-list" class="attachment-list"><p class="attachment-loading">Loading...</p></div>
     <div class="attachment-panel-footer">
-      <kbd>j</kbd><kbd>k</kbd> Navigate &nbsp; <kbd>a</kbd> Upload &nbsp; <kbd>d</kbd> Download &nbsp; <kbd>x</kbd> Delete &nbsp; <kbd>Esc</kbd> Close
+      <kbd>j</kbd><kbd>k</kbd> Navigate &nbsp; <kbd>a</kbd> Upload &nbsp; <kbd>Enter</kbd> Download &nbsp; <kbd>x</kbd> Delete &nbsp; <kbd>Esc</kbd> Close
     </div>
   `;
 
@@ -1001,7 +1032,7 @@ async function openAttachmentPanel(): Promise<void> {
     } else if (e.key === 'a') {
       e.preventDefault();
       await handleAttachmentUpload();
-    } else if (e.key === 'd') {
+    } else if (e.key === 'Enter' || e.key === 'd') {
       e.preventDefault();
       downloadSelectedAttachment();
     } else if (e.key === 'x') {
