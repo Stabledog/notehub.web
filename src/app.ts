@@ -240,8 +240,9 @@ async function showNoteList(): Promise<void> {
   }
 
   const onListKey = (e: KeyboardEvent) => {
-    // Ignore if typing in an input or if overlay is open
+    // Ignore if typing in an input, search is active, or overlay is open
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (searchActive) return;
     if (document.getElementById('repo-picker-overlay')) return;
 
     if (e.key === 'n') {
@@ -316,6 +317,7 @@ async function showNoteList(): Promise<void> {
       document.getElementById('search-input-container')!,
       {
         placeholder: 'Search notes...',
+        initialInsert: true,
         onEscape: dismissSearch,
         onChange: (value: string) => {
           if (debounceTimer) clearTimeout(debounceTimer);

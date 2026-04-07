@@ -35,6 +35,7 @@ export interface VimInputOptions {
   onEnter?: () => void;
   onEscape?: () => void;
   onChange?: (value: string) => void;
+  initialInsert?: boolean;
   extensions?: unknown[];
 }
 
