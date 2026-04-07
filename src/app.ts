@@ -351,6 +351,16 @@ async function showNoteList(): Promise<void> {
       if (searchBarHandle) runSearch(searchBarHandle.getValue());
     });
 
+    // Intercept Enter in capture phase so it works from insert mode too
+    // (onEnter only fires in normal mode; most users press Enter while typing).
+    searchBarHandle.dom.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        (document.activeElement as HTMLElement)?.blur();
+      }
+    }, { capture: true });
+
     // Ctrl+R toggles regex while search bar is focused
     bar.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'r' && e.ctrlKey) {
