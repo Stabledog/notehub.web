@@ -1087,7 +1087,9 @@ async function handleAttachmentUpload(): Promise<void> {
     }
     const base64 = btoa(binary);
 
-    // Check if file already exists — need its SHA to overwrite
+    // Refresh list right before upload so SHA is current, even if the file
+    // was uploaded outside this session or before the panel was opened.
+    await refreshAttachmentList();
     const existing = currentAttachments.find(a => a.name === file.name);
 
     try {
