@@ -223,6 +223,7 @@ async function showNoteList(): Promise<void> {
         <span><kbd>Enter</kbd> Open note</span>
         <span><kbd>n</kbd> New note</span>
         <span><kbd>r</kbd> Refresh</span>
+        <span><kbd>/</kbd> Search</span>
       </footer>
     </div>
   `;
@@ -268,10 +269,296 @@ async function showNoteList(): Promise<void> {
       if (rows.length > 0) {
         (rows[selectedIndex] as HTMLElement).click();
       }
+    } else if (e.key === '/') {
+      e.preventDefault();
+      showSearchBar();
     }
   };
   document.addEventListener('keydown', onListKey);
   cleanupListKeys = () => document.removeEventListener('keydown', onListKey);
+
+  // --- Federated search ---
+  let searchBarHandle: ReturnType<typeof import('./veditor').createVimInput> | null = null;
+  let searchActive = false;
+  let regexMode = false;
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let fullTableHtml = ''; // stashed when search activates
+
+  interface SearchMatch {
+    note: NoteSearchResult;
+    index: number; // index in notesList
+    context: string; // HTML snippet with <mark> highlighting
+  }
+
+  function showSearchBar(): void {
+    if (searchActive) return;
+    searchActive = true;
+
+    // Stash the current table so we can restore on dismiss
+    fullTableHtml = container.innerHTML;
+
+    // Create search bar element
+    const bar = document.createElement('div');
+    bar.className = 'search-bar';
+    bar.id = 'search-bar';
+    bar.innerHTML = `
+      <span class="search-slash">/</span>
+      <div id="search-input-container"></div>
+      <button id="search-regex-toggle" class="search-regex-toggle" title="Toggle regex (Ctrl+R)">.*</button>
+      <span id="search-count" class="search-count"></span>
+    `;
+
+    // Insert before the notes container
+    container.parentElement!.insertBefore(bar, container);
+
+    // Create vim input for the search field
+    searchBarHandle = veditor.createVimInput(
+      document.getElementById('search-input-container')!,
+      {
+        placeholder: 'Search notes...',
+        onEscape: dismissSearch,
+        onChange: (value: string) => {
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => runSearch(value), 150);
+        },
+        onEnter: () => {
+          // Open the selected search result
+          const rows = container.querySelectorAll('.note-row');
+          if (rows.length > 0) {
+            (rows[selectedIndex] as HTMLElement).click();
+          }
+        },
+      },
+    );
+    searchBarHandle.focus();
+
+    updateRegexToggle();
+
+    document.getElementById('search-regex-toggle')!.addEventListener('click', () => {
+      regexMode = !regexMode;
+      updateRegexToggle();
+      // Re-run search with current query
+      if (searchBarHandle) runSearch(searchBarHandle.getValue());
+    });
+
+    // Override j/k/Ctrl+R while search bar is focused
+    bar.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'r' && e.ctrlKey) {
+        e.preventDefault();
+        regexMode = !regexMode;
+        updateRegexToggle();
+        if (searchBarHandle) runSearch(searchBarHandle.getValue());
+      }
+    });
+  }
+
+  function updateRegexToggle(): void {
+    const btn = document.getElementById('search-regex-toggle');
+    if (btn) btn.classList.toggle('active', regexMode);
+  }
+
+  function dismissSearch(): void {
+    if (!searchActive) return;
+    searchActive = false;
+
+    if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+    searchBarHandle?.destroy();
+    searchBarHandle = null;
+
+    document.getElementById('search-bar')?.remove();
+
+    // Restore original table
+    if (fullTableHtml) {
+      container.innerHTML = fullTableHtml;
+      fullTableHtml = '';
+      rebindNoteRows();
+    }
+    selectedIndex = 0;
+    updateSelection();
+  }
+
+  function runSearch(query: string): void {
+    const countEl = document.getElementById('search-count');
+    if (!query.trim()) {
+      // Empty query — restore full list
+      if (fullTableHtml) {
+        container.innerHTML = fullTableHtml;
+        rebindNoteRows();
+      }
+      if (countEl) countEl.textContent = '';
+      selectedIndex = 0;
+      updateSelection();
+      return;
+    }
+
+    const matches = performSearch(query, regexMode, notesList);
+    if (countEl) countEl.textContent = `${matches.length} match${matches.length !== 1 ? 'es' : ''}`;
+    renderSearchResults(matches);
+  }
+
+  function performSearch(query: string, useRegex: boolean, notes: NoteSearchResult[]): SearchMatch[] {
+    let matcher: (text: string) => { index: number; length: number } | null;
+
+    if (useRegex) {
+      let re: RegExp;
+      try {
+        re = new RegExp(query, 'gi');
+      } catch {
+        // Invalid regex — show error indicator
+        const countEl = document.getElementById('search-count');
+        if (countEl) { countEl.textContent = 'invalid regex'; countEl.classList.add('error'); }
+        return [];
+      }
+      const countEl = document.getElementById('search-count');
+      if (countEl) countEl.classList.remove('error');
+
+      matcher = (text: string) => {
+        re.lastIndex = 0;
+        const m = re.exec(text);
+        return m ? { index: m.index, length: m[0].length } : null;
+      };
+    } else {
+      const lower = query.toLowerCase();
+      matcher = (text: string) => {
+        const idx = text.toLowerCase().indexOf(lower);
+        return idx >= 0 ? { index: idx, length: lower.length } : null;
+      };
+    }
+
+    const results: SearchMatch[] = [];
+    for (let i = 0; i < notes.length; i++) {
+      const n = notes[i];
+      const body = n.body ?? '';
+      const titleMatch = matcher(n.title);
+      const bodyMatch = matcher(body);
+      if (!titleMatch && !bodyMatch) continue;
+
+      // Build context snippet from the best match
+      const match = bodyMatch ?? titleMatch!;
+      const source = bodyMatch ? body : n.title;
+      const contextRadius = 40;
+      const start = Math.max(0, match.index - contextRadius);
+      const end = Math.min(source.length, match.index + match.length + contextRadius);
+
+      const before = escapeHtml(source.slice(start, match.index));
+      const matched = escapeHtml(source.slice(match.index, match.index + match.length));
+      const after = escapeHtml(source.slice(match.index + match.length, end));
+      const prefix = start > 0 ? '...' : '';
+      const suffix = end < source.length ? '...' : '';
+      const context = `${prefix}${before}<mark>${matched}</mark>${after}${suffix}`;
+
+      results.push({ note: n, index: i, context });
+    }
+    return results;
+  }
+
+  function renderSearchResults(matches: SearchMatch[]): void {
+    if (matches.length === 0) {
+      container.innerHTML = '<p class="empty">No matches found.</p>';
+      return;
+    }
+
+    container.innerHTML = `
+      <table>
+        <thead><tr><th>Repo</th><th>#</th><th>Title</th><th>Context</th><th>Updated</th></tr></thead>
+        <tbody>
+          ${matches.map((m, i) => `
+            <tr class="note-row" data-index="${m.index}" data-result-index="${i}">
+              <td>${escapeHtml(m.note.owner)}/${escapeHtml(m.note.repo)}</td>
+              <td>${m.note.number}</td>
+              <td>${escapeHtml(m.note.title)}</td>
+              <td class="search-context">${m.context}</td>
+              <td>${new Date(m.note.updated_at).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+
+    selectedIndex = 0;
+    updateSelection();
+
+    // Bind click handlers for search result rows
+    container.querySelectorAll('.note-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const idx = parseInt(row.getAttribute('data-index')!, 10);
+        const note = notesList[idx];
+        if (isMobile) {
+          window.open(issueUrl(state!.host, note.owner, note.repo, note.number) + '#new_comment_field', '_blank');
+        } else {
+          openNote(note.owner, note.repo, note.number);
+        }
+      });
+    });
+  }
+
+  // Re-bind click handlers after restoring the full table HTML
+  function rebindNoteRows(): void {
+    container.querySelectorAll('.copy-url-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const url = (btn as HTMLElement).dataset.url!;
+        navigator.clipboard.writeText(url).then(() => {
+          btn.innerHTML = checkIcon;
+          setTimeout(() => { btn.innerHTML = clipboardIcon; }, 1500);
+        });
+      });
+    });
+
+    container.querySelectorAll('.context-menu-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelector('.note-context-menu')?.remove();
+
+        const idx = parseInt((btn as HTMLElement).dataset.index!, 10);
+        const note = notesList[idx];
+        const rect = (btn as HTMLElement).getBoundingClientRect();
+
+        const menu = document.createElement('div');
+        menu.className = 'note-context-menu';
+        menu.innerHTML = `
+          <button class="context-github-btn">${externalIcon} Edit on GitHub</button>
+          <button class="context-delete-btn">${xIcon} Delete</button>
+        `;
+        menu.style.top = `${rect.bottom + 4}px`;
+        menu.style.left = `${rect.right}px`;
+        document.body.appendChild(menu);
+
+        const closeMenu = () => { menu.remove(); document.removeEventListener('click', closeMenu); };
+        setTimeout(() => document.addEventListener('click', closeMenu), 0);
+
+        menu.querySelector('.context-github-btn')!.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          closeMenu();
+          window.open(issueUrl(state!.host, note.owner, note.repo, note.number) + '#new_comment_field', '_blank');
+        });
+
+        menu.querySelector('.context-delete-btn')!.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          closeMenu();
+          try {
+            await archiveNote(state!.host, state!.token, note.owner, note.repo, note.number);
+            const row = container.querySelector(`.note-row[data-index="${idx}"]`);
+            row?.remove();
+          } catch (err) {
+            alert(`Failed to delete note: ${err instanceof Error ? err.message : err}`);
+          }
+        });
+      });
+    });
+
+    container.querySelectorAll('.note-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const idx = parseInt(row.getAttribute('data-index')!, 10);
+        const note = notesList[idx];
+        if (isMobile) {
+          window.open(issueUrl(state!.host, note.owner, note.repo, note.number) + '#new_comment_field', '_blank');
+        } else {
+          openNote(note.owner, note.repo, note.number);
+        }
+      });
+    });
+  }
 
   document.getElementById('sign-out')!.addEventListener('click', () => {
     localStorage.removeItem(LS_TOKEN);

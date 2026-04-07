@@ -231,6 +231,86 @@ thead th {
   text-align: center;
 }
 
+/* Search bar */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: #181825;
+  border-bottom: 1px solid #313244;
+}
+
+.search-slash {
+  color: #89b4fa;
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+#search-input-container {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
+}
+
+#search-input-container .vim-input .cm-editor {
+  background: #313244;
+  border: 1px solid #45475a;
+}
+
+#search-input-container .vim-input .cm-editor.cm-focused {
+  border-color: #89b4fa;
+}
+
+.search-regex-toggle {
+  padding: 0.2rem 0.5rem;
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  color: #6c7086;
+  cursor: pointer;
+  font-family: monospace;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.search-regex-toggle:hover {
+  color: #cdd6f4;
+  border-color: #585b70;
+}
+
+.search-regex-toggle.active {
+  color: #f9e2af;
+  border-color: #f9e2af;
+  background: #45475a;
+}
+
+.search-count {
+  color: #6c7086;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.search-count.error {
+  color: #f38ba8;
+}
+
+.search-context {
+  font-size: 0.75rem;
+  color: #a6adc8;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-context mark {
+  background: #f9e2af;
+  color: #1e1e2e;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
 /* Editor screen */
 .editor-screen {
   display: flex;
