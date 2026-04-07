@@ -543,3 +543,126 @@ thead th {
 .context-delete-btn:hover {
   background: #45475a;
 }
+
+/* ---------------------------------------------------------------------------
+   Attachment Panel
+   --------------------------------------------------------------------------- */
+
+.attachment-toggle-btn {
+  padding: 0.25rem 0.4rem;
+  display: flex;
+  align-items: center;
+}
+
+.attachment-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  background: #181825;
+  border-top: 2px solid #313244;
+  outline: none;
+  flex-shrink: 0;
+}
+
+.attachment-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.375rem 0.75rem;
+  background: #1e1e2e;
+  border-bottom: 1px solid #313244;
+  flex-shrink: 0;
+}
+
+.attachment-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #cdd6f4;
+}
+
+.attachment-close-btn {
+  background: none;
+  border: none;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.875rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 3px;
+  line-height: 1;
+}
+
+.attachment-close-btn:hover {
+  color: #cdd6f4;
+  background: #313244;
+}
+
+.attachment-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 0.25rem 0;
+}
+
+.attachment-loading,
+.attachment-empty,
+.attachment-error {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  color: #6c7086;
+  margin: 0;
+}
+
+.attachment-error {
+  color: #f38ba8;
+}
+
+.attachment-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.3rem 0.75rem;
+  cursor: pointer;
+  color: #cdd6f4;
+  font-size: 0.8125rem;
+  user-select: none;
+}
+
+.attachment-row:hover {
+  background: #313244;
+}
+
+.attachment-row.selected {
+  background: #45475a;
+}
+
+.attachment-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-size {
+  color: #6c7086;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.attachment-panel-footer {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.7rem;
+  color: #6c7086;
+  border-top: 1px solid #313244;
+  flex-shrink: 0;
+}
+
+.attachment-panel-footer kbd {
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 3px;
+  padding: 0 3px;
+  font-size: 0.7rem;
+}

@@ -110,6 +110,68 @@ export function archiveNote(
   });
 }
 
+// ---------------------------------------------------------------------------
+// File Attachments — stored at .notehub/attachments/{issue}/{filename}
+// ---------------------------------------------------------------------------
+
+export interface Attachment {
+  name: string;
+  path: string;
+  sha: string;
+  size: number;
+  download_url: string;
+}
+
+export async function listAttachments(
+  host: string, token: string, owner: string, repo: string, issueNumber: number,
+): Promise<Attachment[]> {
+  try {
+    return await apiFetch<Attachment[]>(
+      host, token,
+      `/repos/${owner}/${repo}/contents/.notehub/attachments/${issueNumber}`,
+    );
+  } catch (err) {
+    // 404 means the directory doesn't exist yet — no attachments
+    if (err instanceof Error && err.message.includes('404')) return [];
+    throw err;
+  }
+}
+
+export async function uploadAttachment(
+  host: string, token: string, owner: string, repo: string,
+  issueNumber: number, filename: string, base64Content: string, existingSha?: string,
+): Promise<Attachment> {
+  const body: Record<string, unknown> = {
+    message: `notehub: attach ${filename} to #${issueNumber}`,
+    content: base64Content,
+  };
+  if (existingSha) body.sha = existingSha;
+
+  const res = await apiFetch<{ content: Attachment }>(
+    host, token,
+    `/repos/${owner}/${repo}/contents/.notehub/attachments/${issueNumber}/${encodeURIComponent(filename)}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+  );
+  return res.content;
+}
+
+export async function deleteAttachment(
+  host: string, token: string, owner: string, repo: string,
+  path: string, sha: string,
+): Promise<void> {
+  await apiFetch<unknown>(
+    host, token,
+    `/repos/${owner}/${repo}/contents/${path}`,
+    {
+      method: 'DELETE',
+      body: JSON.stringify({
+        message: `notehub: remove ${path.split('/').pop()}`,
+        sha,
+      }),
+    },
+  );
+}
+
 async function ensureLabel(host: string, token: string, owner: string, repo: string): Promise<void> {
   try {
     await apiFetch(host, token, `/repos/${owner}/${repo}/labels`, {

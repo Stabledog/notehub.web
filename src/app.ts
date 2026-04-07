@@ -1,4 +1,4 @@
-import { validateToken, searchNotes, getNote, updateNote, createNote, archiveNote, DEFAULT_HOST, type NoteSearchResult } from './github';
+import { validateToken, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
 
 
 const LS_TOKEN = 'notehub:token';
@@ -58,6 +58,10 @@ let originalBody = '';
 let originalTitle = '';
 let justCreatedNote: NoteSearchResult | null = null;
 let titleHandle: ReturnType<typeof import('./veditor').createVimInput> | null = null;
+
+// Attachment panel state
+let currentAttachments: Attachment[] = [];
+let selectedAttachmentIndex = 0;
 
 const app = document.getElementById('app')!;
 
@@ -833,6 +837,7 @@ function renderEditor(title: string, body: string): void {
         <div id="note-title-container"></div>
         <span id="note-number">${currentNote ? `<a href="${escapeAttr(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>` : 'Title'}</span>
         ${currentNote ? `<button id="copy-note-url" class="copy-url-btn" title="Copy issue URL">${clipboardIcon}</button>` : ''}
+        ${currentNote ? `<button id="attachment-toggle-btn" class="attachment-toggle-btn" title="Attachments (ga)">${paperclipIcon}</button>` : ''}
         <span id="status-msg"></span>
       </header>
       <div id="editor-container"></div>
@@ -854,6 +859,8 @@ function renderEditor(title: string, body: string): void {
     });
   }
 
+  document.getElementById('attachment-toggle-btn')?.addEventListener('click', () => toggleAttachmentPanel());
+
   titleHandle = veditor.createVimInput(
     document.getElementById('note-title-container')!,
     {
@@ -871,6 +878,7 @@ function renderEditor(title: string, body: string): void {
     storagePrefix: 'notehub',
     normalMappings: {
       'gt': () => titleHandle!.focus(),
+      'ga': () => toggleAttachmentPanel(),
     },
   });
 }
@@ -932,6 +940,210 @@ async function handleSave(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Attachment Panel
+// ---------------------------------------------------------------------------
+
+function toggleAttachmentPanel(): void {
+  if (document.getElementById('attachment-panel')) {
+    closeAttachmentPanel();
+  } else {
+    openAttachmentPanel();
+  }
+}
+
+function closeAttachmentPanel(): void {
+  document.getElementById('attachment-panel')?.remove();
+  currentAttachments = [];
+  selectedAttachmentIndex = 0;
+  veditor?.focusEditor();
+}
+
+async function openAttachmentPanel(): Promise<void> {
+  if (!currentNote || !state) return;
+
+  const editorScreen = document.querySelector('.editor-screen');
+  if (!editorScreen) return;
+
+  const panel = document.createElement('div');
+  panel.id = 'attachment-panel';
+  panel.className = 'attachment-panel';
+  panel.tabIndex = 0;
+  panel.innerHTML = `
+    <div class="attachment-panel-header">
+      <span class="attachment-panel-title">${paperclipIcon} Attachments</span>
+      <button id="attachment-close-btn" class="attachment-close-btn" title="Close (Esc)">✕</button>
+    </div>
+    <div id="attachment-list" class="attachment-list"><p class="attachment-loading">Loading...</p></div>
+    <div class="attachment-panel-footer">
+      <kbd>j</kbd><kbd>k</kbd> Navigate &nbsp; <kbd>a</kbd> Upload &nbsp; <kbd>d</kbd> Download &nbsp; <kbd>x</kbd> Delete &nbsp; <kbd>Esc</kbd> Close
+    </div>
+  `;
+
+  editorScreen.appendChild(panel);
+  panel.focus();
+
+  document.getElementById('attachment-close-btn')!.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeAttachmentPanel();
+  });
+
+  panel.addEventListener('keydown', async (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeAttachmentPanel();
+    } else if (e.key === 'j' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      moveAttachmentSelection(1);
+    } else if (e.key === 'k' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      moveAttachmentSelection(-1);
+    } else if (e.key === 'a') {
+      e.preventDefault();
+      await handleAttachmentUpload();
+    } else if (e.key === 'd') {
+      e.preventDefault();
+      downloadSelectedAttachment();
+    } else if (e.key === 'x') {
+      e.preventDefault();
+      await deleteSelectedAttachment();
+    }
+  });
+
+  await refreshAttachmentList();
+}
+
+async function refreshAttachmentList(): Promise<void> {
+  if (!currentNote || !state) return;
+  const listEl = document.getElementById('attachment-list');
+  if (!listEl) return;
+
+  try {
+    currentAttachments = await listAttachments(
+      state.host, state.token, currentNote.owner, currentNote.repo, currentNote.number,
+    );
+  } catch (err) {
+    listEl.innerHTML = `<p class="attachment-error">Failed to load: ${err instanceof Error ? err.message : err}</p>`;
+    return;
+  }
+
+  selectedAttachmentIndex = 0;
+  renderAttachmentRows(listEl);
+}
+
+function renderAttachmentRows(listEl: HTMLElement): void {
+  if (currentAttachments.length === 0) {
+    listEl.innerHTML = '<p class="attachment-empty">No attachments yet. Press <kbd>a</kbd> to upload.</p>';
+    return;
+  }
+
+  listEl.innerHTML = currentAttachments.map((a, i) => `
+    <div class="attachment-row${i === selectedAttachmentIndex ? ' selected' : ''}" data-index="${i}">
+      <span class="attachment-name">${escapeHtml(a.name)}</span>
+      <span class="attachment-size">${formatAttachmentSize(a.size)}</span>
+    </div>
+  `).join('');
+
+  listEl.querySelectorAll('.attachment-row').forEach(row => {
+    row.addEventListener('click', () => {
+      selectedAttachmentIndex = parseInt((row as HTMLElement).dataset.index!, 10);
+      renderAttachmentRows(listEl);
+      document.getElementById('attachment-panel')?.focus();
+    });
+    row.addEventListener('dblclick', () => {
+      const idx = parseInt((row as HTMLElement).dataset.index!, 10);
+      window.open(currentAttachments[idx].download_url, '_blank');
+    });
+  });
+
+  // Scroll selected row into view
+  const selectedRow = listEl.querySelector('.attachment-row.selected');
+  selectedRow?.scrollIntoView({ block: 'nearest' });
+}
+
+function moveAttachmentSelection(delta: number): void {
+  if (currentAttachments.length === 0) return;
+  selectedAttachmentIndex = Math.max(0, Math.min(currentAttachments.length - 1, selectedAttachmentIndex + delta));
+  const listEl = document.getElementById('attachment-list');
+  if (listEl) renderAttachmentRows(listEl);
+}
+
+async function handleAttachmentUpload(): Promise<void> {
+  if (!currentNote || !state) return;
+
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+
+    // Read as ArrayBuffer and base64-encode in chunks (safe for large files)
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    const CHUNK = 8192;
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    }
+    const base64 = btoa(binary);
+
+    // Check if file already exists — need its SHA to overwrite
+    const existing = currentAttachments.find(a => a.name === file.name);
+
+    try {
+      showStatus('Uploading...');
+      const attachment = await uploadAttachment(
+        state!.host, state!.token, currentNote!.owner, currentNote!.repo,
+        currentNote!.number, file.name, base64, existing?.sha,
+      );
+
+      // Copy markdown link to clipboard
+      navigator.clipboard.writeText(`[${file.name}](${attachment.download_url})`);
+
+      showStatus('Uploaded — link copied');
+      await refreshAttachmentList();
+      document.getElementById('attachment-panel')?.focus();
+    } catch (err) {
+      showStatus(`Upload failed: ${err instanceof Error ? err.message : err}`, true);
+      document.getElementById('attachment-panel')?.focus();
+    }
+  };
+  input.click();
+}
+
+function downloadSelectedAttachment(): void {
+  const a = currentAttachments[selectedAttachmentIndex];
+  if (!a) return;
+  window.open(a.download_url, '_blank');
+}
+
+async function deleteSelectedAttachment(): Promise<void> {
+  const a = currentAttachments[selectedAttachmentIndex];
+  if (!a || !currentNote || !state) return;
+
+  if (!confirm(`Delete "${a.name}"?`)) {
+    document.getElementById('attachment-panel')?.focus();
+    return;
+  }
+
+  try {
+    showStatus('Deleting...');
+    await deleteAttachment(state.host, state.token, currentNote.owner, currentNote.repo, a.path, a.sha);
+    showStatus('Deleted');
+    await refreshAttachmentList();
+    document.getElementById('attachment-panel')?.focus();
+  } catch (err) {
+    showStatus(`Delete failed: ${err instanceof Error ? err.message : err}`, true);
+    document.getElementById('attachment-panel')?.focus();
+  }
+}
+
+function formatAttachmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function showStatus(msg: string, isError = false): void {
   const el = document.getElementById('status-msg');
   if (!el) return;
@@ -949,6 +1161,7 @@ function escapeHtml(s: string): string {
 }
 
 const clipboardIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const paperclipIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
 const checkIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 const xIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 const externalIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
