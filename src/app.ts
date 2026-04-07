@@ -1087,23 +1087,35 @@ async function handleAttachmentUpload(): Promise<void> {
     }
     const base64 = btoa(binary);
 
-    // Refresh list right before upload so SHA is current, even if the file
-    // was uploaded outside this session or before the panel was opened.
-    await refreshAttachmentList();
-    const existing = currentAttachments.find(a => a.name === file.name);
+    // Fetch current SHA without re-rendering — handles files uploaded outside
+    // this session or before the panel was opened.
+    let existingSha: string | undefined;
+    try {
+      const fresh = await listAttachments(
+        state!.host, state!.token, currentNote!.owner, currentNote!.repo, currentNote!.number,
+      );
+      existingSha = fresh.find(a => a.name === file.name)?.sha;
+    } catch { /* ignore — treat as new file */ }
 
     try {
       showStatus('Uploading...');
       const attachment = await uploadAttachment(
         state!.host, state!.token, currentNote!.owner, currentNote!.repo,
-        currentNote!.number, file.name, base64, existing?.sha,
+        currentNote!.number, file.name, base64, existingSha,
       );
 
-      // Copy markdown link to clipboard
       navigator.clipboard.writeText(`[${file.name}](${attachment.download_url})`);
-
       showStatus('Uploaded — link copied');
-      await refreshAttachmentList();
+
+      // Update list optimistically from the upload response — no second fetch needed.
+      const existingIdx = currentAttachments.findIndex(a => a.name === file.name);
+      if (existingIdx >= 0) {
+        currentAttachments[existingIdx] = attachment;
+      } else {
+        currentAttachments.push(attachment);
+      }
+      const listEl = document.getElementById('attachment-list');
+      if (listEl) renderAttachmentRows(listEl);
       document.getElementById('attachment-panel')?.focus();
     } catch (err) {
       showStatus(`Upload failed: ${err instanceof Error ? err.message : err}`, true);
@@ -1132,7 +1144,12 @@ async function deleteSelectedAttachment(): Promise<void> {
     showStatus('Deleting...');
     await deleteAttachment(state.host, state.token, currentNote.owner, currentNote.repo, a.path, a.sha);
     showStatus('Deleted');
-    await refreshAttachmentList();
+
+    // Update list optimistically — no re-fetch needed.
+    currentAttachments.splice(selectedAttachmentIndex, 1);
+    selectedAttachmentIndex = Math.min(selectedAttachmentIndex, Math.max(0, currentAttachments.length - 1));
+    const listEl = document.getElementById('attachment-list');
+    if (listEl) renderAttachmentRows(listEl);
     document.getElementById('attachment-panel')?.focus();
   } catch (err) {
     showStatus(`Delete failed: ${err instanceof Error ? err.message : err}`, true);
