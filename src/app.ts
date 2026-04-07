@@ -1,5 +1,6 @@
 import { validateToken, searchNotes, getNote, updateNote, createNote, archiveNote, DEFAULT_HOST, type NoteSearchResult } from './github';
 
+
 const LS_TOKEN = 'notehub:token';
 
 // Touch device detection — used to skip veditor and open GitHub's editor instead
