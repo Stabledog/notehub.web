@@ -56,6 +56,7 @@ let newNoteTarget: { owner: string; repo: string } | null = null;
 let originalBody = '';
 let originalTitle = '';
 let justCreatedNote: NoteSearchResult | null = null;
+let titleHandle: ReturnType<typeof import('./veditor').createVimInput> | null = null;
 
 const app = document.getElementById('app')!;
 
@@ -95,6 +96,7 @@ export async function init(): Promise<void> {
 }
 
 function showAuth(error?: string): void {
+  titleHandle?.destroy(); titleHandle = null;
   veditor?.destroyEditor();
   const savedHost = localStorage.getItem(LS_HOST) ?? DEFAULT_HOST;
 
@@ -137,6 +139,7 @@ function showAuth(error?: string): void {
 }
 
 function showSetup(error?: string): void {
+  titleHandle?.destroy(); titleHandle = null;
   veditor?.destroyEditor();
   if (!state) return;
 
@@ -190,6 +193,7 @@ function showSetup(error?: string): void {
 let cleanupListKeys: (() => void) | null = null;
 
 async function showNoteList(): Promise<void> {
+  titleHandle?.destroy(); titleHandle = null;
   veditor?.destroyEditor();
   cleanupListKeys?.();
   cleanupListKeys = null;
@@ -527,7 +531,7 @@ function renderEditor(title: string, body: string): void {
     <div class="editor-screen">
       <header>
         <button id="back-to-list" title="Back to notes">&larr;</button>
-        <input type="text" id="note-title" value="${escapeAttr(title)}" />
+        <div id="note-title-container"></div>
         <span id="note-number">${currentNote ? `<a href="${escapeAttr(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>` : 'Title'}</span>
         ${currentNote ? `<button id="copy-note-url" class="copy-url-btn" title="Copy issue URL">${clipboardIcon}</button>` : ''}
         <span id="status-msg"></span>
@@ -551,25 +555,23 @@ function renderEditor(title: string, body: string): void {
     });
   }
 
-  const titleInput = document.getElementById('note-title') as HTMLInputElement;
-  titleInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' || e.key === 'Enter') {
-      e.preventDefault();
-      veditor.focusEditor();
-    }
-  });
+  titleHandle = veditor.createVimInput(
+    document.getElementById('note-title-container')!,
+    {
+      value: title,
+      onEnter: () => veditor.focusEditor(),
+      onEscape: () => veditor.focusEditor(),
+    },
+  );
 
   veditor.createEditor(document.getElementById('editor-container')!, body, {
     onSave: handleSave,
     onQuit: () => showNoteList(),
-    isAppDirty: () => {
-      const titleEl = document.getElementById('note-title') as HTMLInputElement | null;
-      return !!(titleEl && titleEl.value.trim() !== originalTitle);
-    },
+    isAppDirty: () => titleHandle!.getValue().trim() !== originalTitle,
   }, {
     storagePrefix: 'notehub',
     normalMappings: {
-      'gt': () => titleInput.focus(),
+      'gt': () => titleHandle!.focus(),
     },
   });
 }
@@ -578,8 +580,7 @@ async function handleSave(): Promise<void> {
   if (!state) return;
 
   const body = veditor.getEditorContent();
-  const titleEl = document.getElementById('note-title') as HTMLInputElement;
-  const title = titleEl.value.trim();
+  const title = (titleHandle?.getValue() ?? '').trim();
 
   // Creating a new note
   if (!currentNote && newNoteTarget) {
