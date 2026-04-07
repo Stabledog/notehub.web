@@ -8,6 +8,7 @@ on:
       - 'package.json'
       - 'vite.config.ts'
       - 'tsconfig.json'
+      - '.github/workflows/**'
   repository_dispatch:
     types: [veditor-updated]
 
