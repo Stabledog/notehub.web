@@ -6,8 +6,9 @@ const LS_TOKEN = 'notehub:token';
 // Touch device detection — used to skip veditor and open GitHub's editor instead
 const isMobile = window.matchMedia('(pointer: coarse)').matches;
 
-// veditor base URL — override via VITE_VEDITOR_BASE for GHES or local dev.
-const VEDITOR_BASE = import.meta.env.VITE_VEDITOR_BASE || 'https://stabledog.github.io/veditor.web';
+// veditor base URL — must be set via VITE_VEDITOR_BASE at build time.
+const VEDITOR_BASE = import.meta.env.VITE_VEDITOR_BASE as string | undefined;
+if (!VEDITOR_BASE) throw new Error('VITE_VEDITOR_BASE not set at build time');
 
 // veditor API — populated by init() before use (skipped on mobile).
 let veditor: typeof import('./veditor');
