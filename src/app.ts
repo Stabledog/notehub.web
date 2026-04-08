@@ -56,6 +56,7 @@ let newNoteTarget: { owner: string; repo: string } | null = null;
 
 let originalBody = '';
 let originalTitle = '';
+let loadedUpdatedAt: string | null = null;
 let justCreatedNote: NoteSearchResult | null = null;
 let titleHandle: ReturnType<typeof import('./veditor').createVimInput> | null = null;
 
@@ -831,6 +832,7 @@ async function openNewNote(owner: string, repo: string): Promise<void> {
   currentNote = null;
   originalBody = DEFAULT_NEW_BODY;
   originalTitle = DEFAULT_NEW_TITLE;
+  loadedUpdatedAt = null;
   renderEditor(DEFAULT_NEW_TITLE, DEFAULT_NEW_BODY);
 }
 
@@ -844,6 +846,7 @@ async function openNote(owner: string, repo: string, number: number): Promise<vo
     currentNote = { ...note, owner, repo };
     originalBody = note.body ?? '';
     originalTitle = note.title;
+    loadedUpdatedAt = note.updated_at;
     renderEditor(note.title, originalBody);
   } catch (err) {
     app.innerHTML = `<div class="editor-screen"><p class="error">Failed to load note: ${err instanceof Error ? err.message : err}</p></div>`;
@@ -939,6 +942,7 @@ async function handleSave(): Promise<void> {
       newNoteTarget = null;
       originalBody = created.body ?? '';
       originalTitle = created.title;
+      loadedUpdatedAt = created.updated_at;
       // Update header to show issue number
       const numEl = document.getElementById('note-number');
       if (numEl) {
@@ -966,14 +970,65 @@ async function handleSave(): Promise<void> {
 
   try {
     showStatus('Saving...');
+
+    // Check for remote changes before saving
+    const fresh = await getNote(state.host, state.token, currentNote.owner, currentNote.repo, currentNote.number);
+    if (loadedUpdatedAt && fresh.updated_at !== loadedUpdatedAt) {
+      const overwrite = await showConflictDialog();
+      if (!overwrite) {
+        showStatus('Save cancelled');
+        return;
+      }
+    }
+
     const updated = await updateNote(state.host, state.token, currentNote.owner, currentNote.repo, currentNote.number, data);
     originalBody = updated.body ?? '';
     originalTitle = updated.title;
+    loadedUpdatedAt = updated.updated_at;
     currentNote = { ...updated, owner: currentNote.owner, repo: currentNote.repo };
     showStatus('Saved');
   } catch (err) {
     showStatus(`Save failed: ${err instanceof Error ? err.message : err}`, true);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Conflict Dialog
+// ---------------------------------------------------------------------------
+
+function showConflictDialog(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.id = 'conflict-overlay';
+    overlay.innerHTML = `
+      <div class="conflict-dialog">
+        <h3>Note changed</h3>
+        <p>This note has been modified since you opened it. Saving will overwrite those changes.</p>
+        <div class="conflict-actions">
+          <button id="conflict-cancel">Cancel</button>
+          <button id="conflict-overwrite" class="danger">Overwrite</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const cleanup = (result: boolean) => {
+      overlay.remove();
+      document.removeEventListener('keydown', keyHandler);
+      resolve(result);
+    };
+
+    function keyHandler(e: KeyboardEvent): void {
+      if (e.key === 'Escape') cleanup(false);
+    }
+
+    overlay.querySelector('#conflict-cancel')!.addEventListener('click', () => cleanup(false));
+    overlay.querySelector('#conflict-overwrite')!.addEventListener('click', () => cleanup(true));
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) cleanup(false);
+    });
+    document.addEventListener('keydown', keyHandler);
+  });
 }
 
 // ---------------------------------------------------------------------------

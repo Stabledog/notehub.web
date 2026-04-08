@@ -673,3 +673,54 @@ thead th {
   margin-left: 0.3rem;
   white-space: nowrap;
 }
+
+/* Conflict dialog */
+#conflict-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.conflict-dialog {
+  background: var(--crust);
+  border: 1px solid var(--surface0);
+  border-radius: 8px;
+  padding: 1.5rem;
+  max-width: 400px;
+  width: 90%;
+}
+
+.conflict-dialog h3 {
+  margin-top: 0;
+  color: var(--peach);
+}
+
+.conflict-dialog p {
+  color: var(--subtext0);
+}
+
+.conflict-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.conflict-actions button {
+  padding: 0.4rem 1rem;
+  border-radius: 4px;
+  border: 1px solid var(--surface1);
+  background: var(--surface0);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.conflict-actions button.danger {
+  background: var(--red);
+  color: var(--base);
+  border-color: var(--red);
+}
