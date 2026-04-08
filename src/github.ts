@@ -54,6 +54,15 @@ export function validateToken(host: string, token: string): Promise<GitHubUser> 
   return apiFetch<GitHubUser>(host, token, '/user');
 }
 
+export async function repoExists(host: string, token: string, owner: string, repo: string): Promise<boolean> {
+  try {
+    await apiFetch(host, token, `/repos/${owner}/${repo}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function listNotes(host: string, token: string, owner: string, repo: string): Promise<GitHubIssue[]> {
   return apiFetch<GitHubIssue[]>(
     host, token,

@@ -1,4 +1,4 @@
-import { validateToken, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentBlob, fetchAttachmentCounts, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
+import { validateToken, repoExists, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentBlob, fetchAttachmentCounts, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
 
 
 const LS_TOKEN = 'notehub:token';
@@ -817,9 +817,14 @@ function showRepoPicker(notesList: NoteSearchResult[]): void {
   });
 }
 
-function openNewNote(owner: string, repo: string): void {
+async function openNewNote(owner: string, repo: string): Promise<void> {
   if (isMobile) {
     window.open(`https://${state!.host}/${owner}/${repo}/issues/new`, '_blank');
+    return;
+  }
+  if (!state) return;
+  if (!await repoExists(state.host, state.token, owner, repo)) {
+    alert(`Repository "${owner}/${repo}" not found. Check the owner and repo name.`);
     return;
   }
   newNoteTarget = { owner, repo };
