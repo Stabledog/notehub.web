@@ -13,4 +13,7 @@ if (!base) {
 
 export default defineConfig({
   base,
+  build: {
+    sourcemap: true,
+  },
 });
