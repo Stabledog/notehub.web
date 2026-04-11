@@ -1216,38 +1216,52 @@ function renderAttachmentRows(listEl: HTMLElement): void {
     return `
     <div class="${classes}" data-index="${i}">
       <span class="attachment-checkbox">${isMulti ? '\u2611' : '\u2610'}</span>
-      <span class="attachment-name" title="Click to download">${escapeHtml(a.name)}</span>
+      <span class="attachment-name" title="Click to preview, Ctrl+click to download">${escapeHtml(a.name)}</span>
       <span class="attachment-size">${formatAttachmentSize(a.size)}</span>
     </div>`;
   }).join('');
 
+  // Track whether panel had focus before mousedown (click changes focus)
+  let panelHadFocus = false;
+  const panel = document.getElementById('attachment-panel');
+  listEl.addEventListener('mousedown', () => {
+    panelHadFocus = panel === document.activeElement;
+  });
+
   listEl.querySelectorAll('.attachment-row').forEach(row => {
     const idx = parseInt((row as HTMLElement).dataset.index!, 10);
 
-    // Click on checkbox toggles multi-select
+    // Click on checkbox toggles multi-select (only if panel already focused)
     row.querySelector('.attachment-checkbox')?.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (!panelHadFocus) { panel?.focus(); return; }
       selectedAttachmentIndex = idx;
       if (multiSelectedAttachments.has(idx)) multiSelectedAttachments.delete(idx);
       else multiSelectedAttachments.add(idx);
       renderAttachmentRows(listEl);
-      document.getElementById('attachment-panel')?.focus();
+      panel?.focus();
     });
 
-    // Click on name triggers download
+    // Click on name: Ctrl+click downloads, plain click previews (only if panel focused)
     row.querySelector('.attachment-name')?.addEventListener('click', async (e) => {
       e.stopPropagation();
+      if (!panelHadFocus) { panel?.focus(); return; }
       selectedAttachmentIndex = idx;
       renderAttachmentRows(listEl);
-      await downloadAttachmentByIndex(idx);
-      document.getElementById('attachment-panel')?.focus();
+      if ((e as MouseEvent).ctrlKey || (e as MouseEvent).metaKey) {
+        await downloadAttachmentByIndex(idx);
+      } else {
+        await previewSelectedAttachment();
+      }
+      panel?.focus();
     });
 
-    // Click on row (outside name/checkbox) just moves cursor
+    // Click on row (outside name/checkbox): focus-only if panel wasn't focused, else move cursor
     row.addEventListener('click', () => {
+      if (!panelHadFocus) { panel?.focus(); return; }
       selectedAttachmentIndex = idx;
       renderAttachmentRows(listEl);
-      document.getElementById('attachment-panel')?.focus();
+      panel?.focus();
     });
   });
 
