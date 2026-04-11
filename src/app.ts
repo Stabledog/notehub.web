@@ -379,6 +379,7 @@ async function showNoteList(): Promise<void> {
           // The search bar stays visible; Escape dismisses it.
           (document.activeElement as HTMLElement)?.blur();
         },
+        storagePrefix: 'notehub',
       },
     );
     searchBarHandle.focus();
@@ -905,7 +906,7 @@ function renderEditor(title: string, body: string): void {
   `;
 
   document.getElementById('back-to-list')!.addEventListener('click', () => {
-    veditor.executeExCommand('q');
+    veditor.requestQuit();
   });
 
   const copyBtn = document.getElementById('copy-note-url');
@@ -927,6 +928,7 @@ function renderEditor(title: string, body: string): void {
       value: title,
       onEnter: () => veditor.focusEditor(),
       onEscape: () => veditor.focusEditor(),
+      storagePrefix: 'notehub',
     },
   );
 
