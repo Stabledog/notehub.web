@@ -212,7 +212,7 @@ export async function fetchAttachmentBlob(
     {
       headers: {
         Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github.raw+json',
+        Accept: 'application/vnd.github.raw',
       },
     },
   );

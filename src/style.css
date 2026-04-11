@@ -667,6 +667,56 @@ thead th {
   font-size: 0.7rem;
 }
 
+.attachment-checkbox {
+  font-size: 0.8125rem;
+  color: #6c7086;
+  flex-shrink: 0;
+  cursor: pointer;
+  width: 1.1em;
+  text-align: center;
+}
+
+.attachment-row.multi-selected .attachment-checkbox {
+  color: #89b4fa;
+}
+
+.attachment-row.multi-selected {
+  background: #2a2b3d;
+}
+
+.attachment-row.multi-selected.selected {
+  background: #45475a;
+}
+
+.attachment-name {
+  cursor: pointer;
+}
+
+.attachment-name:hover {
+  text-decoration: underline;
+  color: #89b4fa;
+}
+
+.attachment-repo-link {
+  color: #6c7086;
+  text-decoration: none;
+  font-size: 0.875rem;
+  margin-left: 0.25rem;
+}
+
+.attachment-repo-link:hover {
+  color: #89b4fa;
+}
+
+.footer-action {
+  display: inline;
+  margin-right: 0.5em;
+}
+
+.footer-action[data-action]:not([data-action="navigate"]):hover {
+  color: #89b4fa;
+}
+
 .attachment-count-badge {
   color: #6c7086;
   font-size: 0.75rem;

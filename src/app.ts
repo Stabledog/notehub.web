@@ -85,6 +85,7 @@ let titleHandle: ReturnType<typeof import('./veditor').createVimInput> | null = 
 // Attachment panel state
 let currentAttachments: Attachment[] = [];
 let selectedAttachmentIndex = 0;
+let multiSelectedAttachments = new Set<number>();
 
 const app = document.getElementById('app')!;
 
@@ -1082,6 +1083,7 @@ function closeAttachmentPanel(): void {
   document.getElementById('attachment-panel')?.remove();
   currentAttachments = [];
   selectedAttachmentIndex = 0;
+  multiSelectedAttachments.clear();
   veditor?.focusEditor();
 }
 
@@ -1091,18 +1093,33 @@ async function openAttachmentPanel(): Promise<void> {
   const editorScreen = document.querySelector('.editor-screen');
   if (!editorScreen) return;
 
+  // Build repo link for header
+  const ar = getAttachmentsRepo();
+  const repoLink = ar && state && currentNote
+    ? `https://${state.host}/${ar.owner}/${ar.repo}/tree/main/${currentNote.owner}/${currentNote.repo}/${currentNote.number}`
+    : '';
+
   const panel = document.createElement('div');
   panel.id = 'attachment-panel';
   panel.className = 'attachment-panel';
   panel.tabIndex = 0;
   panel.innerHTML = `
     <div class="attachment-panel-header">
-      <span class="attachment-panel-title">${paperclipIcon} Attachments</span>
-      <button id="attachment-close-btn" class="attachment-close-btn" title="Close (Esc)">✕</button>
+      <span class="attachment-panel-title">
+        ${paperclipIcon} Attachments
+        ${repoLink ? `<a href="${repoLink}" target="_blank" class="attachment-repo-link" title="Open attachments folder on GitHub">\u2197</a>` : ''}
+      </span>
+      <button id="attachment-close-btn" class="attachment-close-btn" title="Close (Esc)">\u2715</button>
     </div>
     <div id="attachment-list" class="attachment-list"><p class="attachment-loading">Loading...</p></div>
     <div class="attachment-panel-footer">
-      <kbd>j</kbd><kbd>k</kbd> Navigate &nbsp; <kbd>a</kbd> Upload &nbsp; <kbd>Enter</kbd> Download &nbsp; <kbd>x</kbd> Delete &nbsp; <kbd>Esc</kbd> Close
+      <span class="footer-action" data-action="navigate"><kbd>j</kbd><kbd>k</kbd> Nav</span>
+      <span class="footer-action" data-action="select"><kbd>Space</kbd> Select</span>
+      <span class="footer-action" data-action="upload"><kbd>a</kbd> Upload</span>
+      <span class="footer-action" data-action="download"><kbd>Enter</kbd> Download</span>
+      <span class="footer-action" data-action="preview"><kbd>p</kbd> Preview</span>
+      <span class="footer-action" data-action="delete"><kbd>x</kbd> Delete</span>
+      <span class="footer-action" data-action="close"><kbd>Esc</kbd> Close</span>
     </div>
   `;
 
@@ -1112,6 +1129,23 @@ async function openAttachmentPanel(): Promise<void> {
   document.getElementById('attachment-close-btn')!.addEventListener('click', (e) => {
     e.stopPropagation();
     closeAttachmentPanel();
+  });
+
+  // Clickable footer actions
+  panel.querySelectorAll('.footer-action[data-action]').forEach(el => {
+    const action = (el as HTMLElement).dataset.action;
+    if (action === 'navigate') return; // j/k not meaningful as click
+    (el as HTMLElement).style.cursor = 'pointer';
+    el.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (action === 'select') toggleMultiSelect();
+      else if (action === 'upload') await handleAttachmentUpload();
+      else if (action === 'download') await downloadSelectedAttachment();
+      else if (action === 'preview') await previewSelectedAttachment();
+      else if (action === 'delete') await deleteSelectedAttachments();
+      else if (action === 'close') closeAttachmentPanel();
+      panel.focus();
+    });
   });
 
   panel.addEventListener('keydown', async (e: KeyboardEvent) => {
@@ -1130,9 +1164,15 @@ async function openAttachmentPanel(): Promise<void> {
     } else if (e.key === 'Enter' || e.key === 'd') {
       e.preventDefault();
       await downloadSelectedAttachment();
+    } else if (e.key === 'p') {
+      e.preventDefault();
+      await previewSelectedAttachment();
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      toggleMultiSelect();
     } else if (e.key === 'x') {
       e.preventDefault();
-      await deleteSelectedAttachment();
+      await deleteSelectedAttachments();
     }
   });
 
@@ -1169,22 +1209,45 @@ function renderAttachmentRows(listEl: HTMLElement): void {
     return;
   }
 
-  listEl.innerHTML = currentAttachments.map((a, i) => `
-    <div class="attachment-row${i === selectedAttachmentIndex ? ' selected' : ''}" data-index="${i}">
-      <span class="attachment-name">${escapeHtml(a.name)}</span>
+  listEl.innerHTML = currentAttachments.map((a, i) => {
+    const isCursor = i === selectedAttachmentIndex;
+    const isMulti = multiSelectedAttachments.has(i);
+    const classes = ['attachment-row', isCursor ? 'selected' : '', isMulti ? 'multi-selected' : ''].filter(Boolean).join(' ');
+    return `
+    <div class="${classes}" data-index="${i}">
+      <span class="attachment-checkbox">${isMulti ? '\u2611' : '\u2610'}</span>
+      <span class="attachment-name" title="Click to download">${escapeHtml(a.name)}</span>
       <span class="attachment-size">${formatAttachmentSize(a.size)}</span>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 
   listEl.querySelectorAll('.attachment-row').forEach(row => {
-    row.addEventListener('click', () => {
-      selectedAttachmentIndex = parseInt((row as HTMLElement).dataset.index!, 10);
+    const idx = parseInt((row as HTMLElement).dataset.index!, 10);
+
+    // Click on checkbox toggles multi-select
+    row.querySelector('.attachment-checkbox')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectedAttachmentIndex = idx;
+      if (multiSelectedAttachments.has(idx)) multiSelectedAttachments.delete(idx);
+      else multiSelectedAttachments.add(idx);
       renderAttachmentRows(listEl);
       document.getElementById('attachment-panel')?.focus();
     });
-    row.addEventListener('dblclick', () => {
-      const idx = parseInt((row as HTMLElement).dataset.index!, 10);
-      window.open(currentAttachments[idx].download_url, '_blank');
+
+    // Click on name triggers download
+    row.querySelector('.attachment-name')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      selectedAttachmentIndex = idx;
+      renderAttachmentRows(listEl);
+      await downloadAttachmentByIndex(idx);
+      document.getElementById('attachment-panel')?.focus();
+    });
+
+    // Click on row (outside name/checkbox) just moves cursor
+    row.addEventListener('click', () => {
+      selectedAttachmentIndex = idx;
+      renderAttachmentRows(listEl);
+      document.getElementById('attachment-panel')?.focus();
     });
   });
 
@@ -1265,8 +1328,8 @@ async function handleAttachmentUpload(): Promise<void> {
   input.click();
 }
 
-async function downloadSelectedAttachment(): Promise<void> {
-  const a = currentAttachments[selectedAttachmentIndex];
+async function downloadAttachmentByIndex(idx: number): Promise<void> {
+  const a = currentAttachments[idx];
   if (!a || !currentNote || !state) return;
   const ar = getAttachmentsRepo();
   if (!ar) return;
@@ -1287,25 +1350,81 @@ async function downloadSelectedAttachment(): Promise<void> {
   }
 }
 
-async function deleteSelectedAttachment(): Promise<void> {
+async function downloadSelectedAttachment(): Promise<void> {
+  await downloadAttachmentByIndex(selectedAttachmentIndex);
+}
+
+async function previewSelectedAttachment(): Promise<void> {
   const a = currentAttachments[selectedAttachmentIndex];
   if (!a || !currentNote || !state) return;
+  const ar = getAttachmentsRepo();
+  if (!ar) return;
+  try {
+    showStatus('Loading preview...');
+    const { blob } = await fetchAttachmentBlob(
+      state.host, state.token, ar.owner, ar.repo, a.path,
+    );
+    const ext = a.name.split('.').pop()?.toLowerCase() ?? '';
+    const mimeTypes: Record<string, string> = {
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
+      webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp',
+      pdf: 'application/pdf', txt: 'text/plain', md: 'text/plain',
+      json: 'application/json', csv: 'text/csv', html: 'text/html',
+    };
+    const typed = mimeTypes[ext] ? new Blob([blob], { type: mimeTypes[ext] }) : blob;
+    const url = URL.createObjectURL(typed);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    showStatus('');
+  } catch (err) {
+    showStatus(`Preview failed: ${err instanceof Error ? err.message : err}`, true);
+  }
+}
 
+function toggleMultiSelect(): void {
+  if (currentAttachments.length === 0) return;
+  if (multiSelectedAttachments.has(selectedAttachmentIndex)) {
+    multiSelectedAttachments.delete(selectedAttachmentIndex);
+  } else {
+    multiSelectedAttachments.add(selectedAttachmentIndex);
+  }
+  const listEl = document.getElementById('attachment-list');
+  if (listEl) renderAttachmentRows(listEl);
+}
+
+async function deleteSelectedAttachments(): Promise<void> {
+  if (!currentNote || !state) return;
   const ar = getAttachmentsRepo();
   if (!ar) return;
 
-  if (!confirm(`Delete "${a.name}"?`)) {
+  // If multi-selected, delete those; otherwise delete the cursor item
+  const indices = multiSelectedAttachments.size > 0
+    ? [...multiSelectedAttachments].sort((a, b) => b - a) // descending for safe splicing
+    : [selectedAttachmentIndex];
+
+  const names = indices.map(i => currentAttachments[i]?.name).filter(Boolean);
+  if (names.length === 0) return;
+
+  const msg = names.length === 1 ? `Delete "${names[0]}"?` : `Delete ${names.length} attachments?\n${names.join('\n')}`;
+  if (!confirm(msg)) {
     document.getElementById('attachment-panel')?.focus();
     return;
   }
 
   try {
-    showStatus('Deleting...');
-    await deleteAttachment(state.host, state.token, ar.owner, ar.repo, a.path, a.sha);
-    showStatus('Deleted');
+    showStatus(`Deleting ${names.length === 1 ? '' : names.length + ' '}...`);
+    for (const idx of indices) {
+      const a = currentAttachments[idx];
+      if (!a) continue;
+      await deleteAttachment(state.host, state.token, ar.owner, ar.repo, a.path, a.sha);
+    }
+    showStatus(names.length === 1 ? 'Deleted' : `Deleted ${names.length} attachments`);
 
-    // Update list optimistically — no re-fetch needed.
-    currentAttachments.splice(selectedAttachmentIndex, 1);
+    // Remove from array in descending order so indices stay valid
+    for (const idx of indices) {
+      currentAttachments.splice(idx, 1);
+    }
+    multiSelectedAttachments.clear();
     selectedAttachmentIndex = Math.min(selectedAttachmentIndex, Math.max(0, currentAttachments.length - 1));
     const listEl = document.getElementById('attachment-list');
     if (listEl) renderAttachmentRows(listEl);
