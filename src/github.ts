@@ -120,7 +120,8 @@ export function archiveNote(
 }
 
 // ---------------------------------------------------------------------------
-// File Attachments — stored at .notehub/attachments/{issue}/{filename}
+// File Attachments — stored in a dedicated sibling repo: {defaultRepo}.attachments
+// Path structure: {noteOwner}/{noteRepo}/{issueNumber}/{filename}
 // ---------------------------------------------------------------------------
 
 export interface Attachment {
@@ -131,76 +132,83 @@ export interface Attachment {
   download_url: string;
 }
 
-interface DirEntry { name: string; type: string; }
+export function getAttachmentsRepoInfo(defaultRepo: string): { owner: string; repo: string } {
+  const [owner, repo] = defaultRepo.split('/');
+  return { owner, repo: `${repo}.attachments` };
+}
+
+export function rawContentUrl(host: string, owner: string, repo: string, path: string): string {
+  if (host === 'github.com') return `https://raw.githubusercontent.com/${owner}/${repo}/main/${path}`;
+  return `https://${host}/raw/${owner}/${repo}/main/${path}`;
+}
+
+interface TreeEntry { path: string; type: string; }
 
 /**
- * Returns a map of issueNumber → file count for all issues with attachments
- * in the repo. Makes (1 + N) API calls where N = issues that have attachments.
+ * Returns a map of "{noteOwner}/{noteRepo}/{issueNumber}" → file count
+ * for all issues with attachments. Uses the Git Trees API for a single call.
  */
 export async function fetchAttachmentCounts(
-  host: string, token: string, owner: string, repo: string,
-): Promise<Map<number, number>> {
-  const counts = new Map<number, number>();
-  let dirs: DirEntry[];
+  host: string, token: string, attachOwner: string, attachRepo: string,
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
   try {
-    dirs = await apiFetch<DirEntry[]>(host, token, `/repos/${owner}/${repo}/contents/.notehub/attachments`);
+    const tree = await apiFetch<{ tree: TreeEntry[] }>(
+      host, token, `/repos/${attachOwner}/${attachRepo}/git/trees/main?recursive=1`,
+    );
+    for (const entry of tree.tree) {
+      if (entry.type !== 'blob') continue;
+      const parts = entry.path.split('/');
+      // Expected: noteOwner/noteRepo/issueNumber/filename (4+ segments)
+      if (parts.length < 4) continue;
+      const key = `${parts[0]}/${parts[1]}/${parts[2]}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
   } catch {
-    return counts; // 404 = no attachments anywhere
+    // 404 = repo doesn't exist or is empty
   }
-  await Promise.all(
-    dirs.filter(d => d.type === 'dir').map(async (dir) => {
-      const issueNum = parseInt(dir.name, 10);
-      if (isNaN(issueNum)) return;
-      try {
-        const files = await apiFetch<DirEntry[]>(
-          host, token, `/repos/${owner}/${repo}/contents/.notehub/attachments/${issueNum}`,
-        );
-        const n = files.filter(f => f.type === 'file').length;
-        if (n > 0) counts.set(issueNum, n);
-      } catch { /* ignore */ }
-    }),
-  );
   return counts;
 }
 
 export async function listAttachments(
-  host: string, token: string, owner: string, repo: string, issueNumber: number,
+  host: string, token: string, attachOwner: string, attachRepo: string,
+  noteOwner: string, noteRepo: string, issueNumber: number,
 ): Promise<Attachment[]> {
   try {
     return await apiFetch<Attachment[]>(
       host, token,
-      `/repos/${owner}/${repo}/contents/.notehub/attachments/${issueNumber}`,
+      `/repos/${attachOwner}/${attachRepo}/contents/${noteOwner}/${noteRepo}/${issueNumber}`,
     );
   } catch (err) {
-    // 404 means the directory doesn't exist yet — no attachments
     if (err instanceof Error && err.message.includes('404')) return [];
     throw err;
   }
 }
 
 export async function uploadAttachment(
-  host: string, token: string, owner: string, repo: string,
-  issueNumber: number, filename: string, base64Content: string, existingSha?: string,
+  host: string, token: string, attachOwner: string, attachRepo: string,
+  noteOwner: string, noteRepo: string, issueNumber: number,
+  filename: string, base64Content: string, existingSha?: string,
 ): Promise<Attachment> {
   const body: Record<string, unknown> = {
-    message: `notehub: attach ${filename} to #${issueNumber}`,
+    message: `notehub: attach ${filename} to ${noteOwner}/${noteRepo}#${issueNumber}`,
     content: base64Content,
   };
   if (existingSha) body.sha = existingSha;
 
   const res = await apiFetch<{ content: Attachment }>(
     host, token,
-    `/repos/${owner}/${repo}/contents/.notehub/attachments/${issueNumber}/${encodeURIComponent(filename)}`,
+    `/repos/${attachOwner}/${attachRepo}/contents/${noteOwner}/${noteRepo}/${issueNumber}/${encodeURIComponent(filename)}`,
     { method: 'PUT', body: JSON.stringify(body) },
   );
   return res.content;
 }
 
 export async function fetchAttachmentBlob(
-  host: string, token: string, owner: string, repo: string, path: string,
+  host: string, token: string, attachOwner: string, attachRepo: string, path: string,
 ): Promise<{ blob: Blob; filename: string }> {
   const res = await fetch(
-    `${apiBase(host)}/repos/${owner}/${repo}/contents/${path}`,
+    `${apiBase(host)}/repos/${attachOwner}/${attachRepo}/contents/${path}`,
     {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -218,12 +226,12 @@ export async function fetchAttachmentBlob(
 }
 
 export async function deleteAttachment(
-  host: string, token: string, owner: string, repo: string,
+  host: string, token: string, attachOwner: string, attachRepo: string,
   path: string, sha: string,
 ): Promise<void> {
   await apiFetch<unknown>(
     host, token,
-    `/repos/${owner}/${repo}/contents/${path}`,
+    `/repos/${attachOwner}/${attachRepo}/contents/${path}`,
     {
       method: 'DELETE',
       body: JSON.stringify({

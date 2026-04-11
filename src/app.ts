@@ -1,4 +1,4 @@
-import { validateToken, repoExists, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentBlob, fetchAttachmentCounts, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
+import { validateToken, repoExists, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentBlob, fetchAttachmentCounts, getAttachmentsRepoInfo, rawContentUrl, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
 
 
 const LS_TOKEN = 'notehub:token';
@@ -49,6 +49,27 @@ function getPinnedIssue(): PinnedIssue | null {
 
 function isSetupComplete(): boolean {
   return getDefaultRepo() !== null;
+}
+
+function getAttachmentsRepo(): { owner: string; repo: string } | null {
+  const defaultRepo = getDefaultRepo();
+  if (!defaultRepo) return null;
+  return getAttachmentsRepoInfo(defaultRepo);
+}
+
+async function ensureAttachmentRepo(): Promise<{ owner: string; repo: string } | null> {
+  if (!state) return null;
+  const ar = getAttachmentsRepo();
+  if (!ar) {
+    showStatus('No default repo configured — cannot use attachments.', true);
+    return null;
+  }
+  const exists = await repoExists(state.host, state.token, ar.owner, ar.repo);
+  if (!exists) {
+    showStatus(`Attachments repo "${ar.owner}/${ar.repo}" not found. Create it on GitHub to use attachments.`, true);
+    return null;
+  }
+  return ar;
 }
 
 let state: AppState | null = null;
@@ -151,6 +172,7 @@ function showSetup(error?: string): void {
   if (!state) return;
 
   const suggestedRepo = `${state.username}/notehub.default`;
+  const suggestedAttach = getAttachmentsRepoInfo(suggestedRepo);
 
   app.innerHTML = `
     <div class="auth-screen">
@@ -164,10 +186,22 @@ function showSetup(error?: string): void {
         <label>Pinned Issue Number <span style="color:#6c7086">(optional)</span>
           <input type="number" id="setup-pinned" placeholder="e.g. 7" min="1" />
         </label>
+        <p id="attach-hint" style="color:#6c7086;font-size:0.8125rem;margin:0.5rem 0 0">To use file attachments, create a repo named <code>${suggestedAttach.owner}/${suggestedAttach.repo}</code></p>
         <button type="submit">Save &amp; Continue</button>
       </form>
     </div>
   `;
+
+  document.getElementById('setup-repo')!.addEventListener('input', () => {
+    const val = (document.getElementById('setup-repo') as HTMLInputElement).value.trim();
+    const hint = document.getElementById('attach-hint');
+    if (!hint) return;
+    const parts = val.split('/');
+    if (parts.length === 2 && parts[0] && parts[1]) {
+      const info = getAttachmentsRepoInfo(val);
+      hint.innerHTML = `To use file attachments, create a repo named <code>${info.owner}/${info.repo}</code>`;
+    }
+  });
 
   document.getElementById('setup-form')!.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -714,20 +748,17 @@ async function showNoteList(): Promise<void> {
   }
 }
 
-async function loadAttachmentBadges(notes: NoteSearchResult[]): Promise<void> {
+async function loadAttachmentBadges(_notes: NoteSearchResult[]): Promise<void> {
   if (!state) return;
-  const repos = new Map<string, { owner: string; repo: string }>();
-  for (const n of notes) repos.set(`${n.owner}/${n.repo}`, { owner: n.owner, repo: n.repo });
+  const ar = getAttachmentsRepo();
+  if (!ar) return;
 
-  await Promise.all(Array.from(repos.values()).map(async ({ owner, repo }) => {
-    const counts = await fetchAttachmentCounts(state!.host, state!.token, owner, repo);
-    document.querySelectorAll<HTMLElement>('.attachment-count-badge').forEach(badge => {
-      if (badge.dataset.owner === owner && badge.dataset.repo === repo) {
-        const count = counts.get(parseInt(badge.dataset.issue!, 10));
-        if (count) badge.textContent = ` 📎${count}`;
-      }
-    });
-  }));
+  const counts = await fetchAttachmentCounts(state.host, state.token, ar.owner, ar.repo);
+  document.querySelectorAll<HTMLElement>('.attachment-count-badge').forEach(badge => {
+    const key = `${badge.dataset.owner}/${badge.dataset.repo}/${badge.dataset.issue}`;
+    const count = counts.get(key);
+    if (count) badge.textContent = ` 📎${count}`;
+  });
 }
 
 function showRepoPicker(notesList: NoteSearchResult[]): void {
@@ -913,13 +944,16 @@ function renderEditor(title: string, body: string): void {
   // Auto-open attachment panel if the note already has attachments
   if (currentNote) {
     const note = currentNote;
-    listAttachments(state!.host, state!.token, note.owner, note.repo, note.number)
-      .then(attachments => {
-        if (attachments.length > 0 && document.querySelector('.editor-screen')) {
-          openAttachmentPanel();
-        }
-      })
-      .catch(() => {});
+    const ar = getAttachmentsRepo();
+    if (ar) {
+      listAttachments(state!.host, state!.token, ar.owner, ar.repo, note.owner, note.repo, note.number)
+        .then(attachments => {
+          if (attachments.length > 0 && document.querySelector('.editor-screen')) {
+            openAttachmentPanel();
+          }
+        })
+        .catch(() => {});
+    }
   }
 }
 
@@ -1110,9 +1144,15 @@ async function refreshAttachmentList(): Promise<void> {
   const listEl = document.getElementById('attachment-list');
   if (!listEl) return;
 
+  const ar = await ensureAttachmentRepo();
+  if (!ar) {
+    listEl.innerHTML = '<p class="attachment-error">Attachments repo not available.</p>';
+    return;
+  }
+
   try {
     currentAttachments = await listAttachments(
-      state.host, state.token, currentNote.owner, currentNote.repo, currentNote.number,
+      state.host, state.token, ar.owner, ar.repo, currentNote.owner, currentNote.repo, currentNote.number,
     );
   } catch (err) {
     listEl.innerHTML = `<p class="attachment-error">Failed to load: ${err instanceof Error ? err.message : err}</p>`;
@@ -1163,6 +1203,9 @@ function moveAttachmentSelection(delta: number): void {
 async function handleAttachmentUpload(): Promise<void> {
   if (!currentNote || !state) return;
 
+  const ar = await ensureAttachmentRepo();
+  if (!ar) return;
+
   const input = document.createElement('input');
   input.type = 'file';
   input.onchange = async () => {
@@ -1184,7 +1227,7 @@ async function handleAttachmentUpload(): Promise<void> {
     let existingSha: string | undefined;
     try {
       const fresh = await listAttachments(
-        state!.host, state!.token, currentNote!.owner, currentNote!.repo, currentNote!.number,
+        state!.host, state!.token, ar.owner, ar.repo, currentNote!.owner, currentNote!.repo, currentNote!.number,
       );
       existingSha = fresh.find(a => a.name === file.name)?.sha;
     } catch { /* ignore — treat as new file */ }
@@ -1192,11 +1235,16 @@ async function handleAttachmentUpload(): Promise<void> {
     try {
       showStatus('Uploading...');
       const attachment = await uploadAttachment(
-        state!.host, state!.token, currentNote!.owner, currentNote!.repo,
-        currentNote!.number, file.name, base64, existingSha,
+        state!.host, state!.token, ar.owner, ar.repo,
+        currentNote!.owner, currentNote!.repo, currentNote!.number,
+        file.name, base64, existingSha,
       );
 
-      navigator.clipboard.writeText(`[${file.name}](${attachment.download_url})`);
+      const rawUrl = rawContentUrl(
+        state!.host, ar.owner, ar.repo,
+        `${currentNote!.owner}/${currentNote!.repo}/${currentNote!.number}/${file.name}`,
+      );
+      navigator.clipboard.writeText(`[${file.name}](${rawUrl})`);
       showStatus('Uploaded — link copied');
 
       // Update list optimistically from the upload response — no second fetch needed.
@@ -1220,10 +1268,12 @@ async function handleAttachmentUpload(): Promise<void> {
 async function downloadSelectedAttachment(): Promise<void> {
   const a = currentAttachments[selectedAttachmentIndex];
   if (!a || !currentNote || !state) return;
+  const ar = getAttachmentsRepo();
+  if (!ar) return;
   try {
     showStatus('Downloading...');
     const { blob, filename } = await fetchAttachmentBlob(
-      state.host, state.token, currentNote.owner, currentNote.repo, a.path,
+      state.host, state.token, ar.owner, ar.repo, a.path,
     );
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -1241,6 +1291,9 @@ async function deleteSelectedAttachment(): Promise<void> {
   const a = currentAttachments[selectedAttachmentIndex];
   if (!a || !currentNote || !state) return;
 
+  const ar = getAttachmentsRepo();
+  if (!ar) return;
+
   if (!confirm(`Delete "${a.name}"?`)) {
     document.getElementById('attachment-panel')?.focus();
     return;
@@ -1248,7 +1301,7 @@ async function deleteSelectedAttachment(): Promise<void> {
 
   try {
     showStatus('Deleting...');
-    await deleteAttachment(state.host, state.token, currentNote.owner, currentNote.repo, a.path, a.sha);
+    await deleteAttachment(state.host, state.token, ar.owner, ar.repo, a.path, a.sha);
     showStatus('Deleted');
 
     // Update list optimistically — no re-fetch needed.
