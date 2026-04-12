@@ -1,5 +1,5 @@
 import { validateToken, repoExists, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentBlob, fetchAttachmentCounts, getAttachmentsRepoInfo, rawContentUrl, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
-import { logError, logInfo, createLogViewer } from './logging-client';
+import { logError, logWarn, logInfo, createLogViewer } from './logging-client';
 
 
 const LS_TOKEN = 'notehub:token';
@@ -157,7 +157,9 @@ function showAuth(error?: string): void {
     const token = (document.getElementById('pat') as HTMLInputElement).value.trim();
 
     try {
+      logInfo(`Auth: Attempting to validate token for host=${host}`);
       const user = await validateToken(host, token);
+      logInfo(`Auth: Token validated for user ${user.login} on ${host}`);
       localStorage.setItem(LS_HOST, host);
       localStorage.setItem(LS_TOKEN, token);
       state = { host, token, username: user.login };
@@ -167,6 +169,7 @@ function showAuth(error?: string): void {
         showNoteList();
       }
     } catch (err) {
+      logError(`Auth: Token validation failed for host=${host}: ${err instanceof Error ? err.message : err}`);
       showAuth(`Authentication failed: ${err instanceof Error ? err.message : err}`);
     }
   });
@@ -634,7 +637,9 @@ async function showNoteList(): Promise<void> {
   });
 
   try {
+    logInfo(`Note list: Fetching notes for all configured repos`);
     notesList = await searchNotes(state.host, state.token);
+    logInfo(`Note list: Loaded ${notesList.length} notes`);
 
     // If we just created a note, the Search API may not have indexed it yet.
     // Merge it into the results if missing.
@@ -645,6 +650,7 @@ async function showNoteList(): Promise<void> {
         n => n.owner === jc.owner && n.repo === jc.repo && n.number === jc.number
       );
       if (!alreadyPresent) {
+        logWarn(`Note list: Search API may not have indexed newly created note yet; using cache`);
         notesList.unshift(jc);
       }
     }
@@ -756,8 +762,10 @@ async function showNoteList(): Promise<void> {
     // Async: fetch attachment counts per unique repo and populate badges
     loadAttachmentBadges(notesList).catch(() => {});
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(`Note list: Failed to load notes: ${msg}`);
     document.getElementById('notes-container')!.innerHTML =
-      `<p class="error">Failed to load notes: ${err instanceof Error ? err.message : err}</p>`;
+      `<p class="error">Failed to load notes: ${msg}</p>`;
   }
 }
 
@@ -870,6 +878,7 @@ async function openNewNote(owner: string, repo: string): Promise<void> {
   }
   if (!state) return;
   if (!await repoExists(state.host, state.token, owner, repo)) {
+    logError(`Auth: Repo validation failed for ${owner}/${repo}`);
     alert(`Repository "${owner}/${repo}" not found. Check the owner and repo name.`);
     return;
   }
@@ -887,14 +896,18 @@ async function openNote(owner: string, repo: string, number: number): Promise<vo
   app.innerHTML = `<div class="editor-screen"><p>Loading note #${number}...</p></div>`;
 
   try {
+    logInfo(`Note: Opening note #${number} from ${owner}/${repo}`);
     const note = await getNote(state.host, state.token, owner, repo, number);
+    logInfo(`Note: Loaded note #${number}: "${note.title}"`);
     currentNote = { ...note, owner, repo };
     originalBody = note.body ?? '';
     originalTitle = note.title;
     loadedUpdatedAt = note.updated_at;
     renderEditor(note.title, originalBody);
   } catch (err) {
-    app.innerHTML = `<div class="editor-screen"><p class="error">Failed to load note: ${err instanceof Error ? err.message : err}</p></div>`;
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(`Note: Failed to load note #${number}: ${msg}`);
+    app.innerHTML = `<div class="editor-screen"><p class="error">Failed to load note: ${msg}</p></div>`;
   }
 }
 
@@ -988,7 +1001,9 @@ async function handleSave(): Promise<void> {
     }
     try {
       showStatus('Creating...');
+      logInfo(`Note: Creating new note in ${newNoteTarget.owner}/${newNoteTarget.repo}`);
       const created = await createNote(state.host, state.token, newNoteTarget.owner, newNoteTarget.repo, title, body);
+      logInfo(`Note: Created new note: #${created.number}`);
       currentNote = { ...created, owner: newNoteTarget.owner, repo: newNoteTarget.repo };
       justCreatedNote = currentNote;
       newNoteTarget = null;
@@ -1003,7 +1018,9 @@ async function handleSave(): Promise<void> {
 
       showStatus('Created');
     } catch (err) {
-      showStatus(`Create failed: ${err instanceof Error ? err.message : err}`, true);
+      const msg = err instanceof Error ? err.message : String(err);
+      logError(`Note: Failed to create note: ${msg}`);
+      showStatus(`Create failed: ${msg}`, true);
     }
     return;
   }
@@ -1022,25 +1039,31 @@ async function handleSave(): Promise<void> {
 
   try {
     showStatus('Saving...');
+    logInfo(`Note: Save initiated for #${currentNote.number}`);
 
     // Check for remote changes before saving
     const fresh = await getNote(state.host, state.token, currentNote.owner, currentNote.repo, currentNote.number);
     if (loadedUpdatedAt && fresh.updated_at !== loadedUpdatedAt) {
+      logWarn(`Note: Remote conflict detected for #${currentNote.number}; user chose to overwrite`);
       const overwrite = await showConflictDialog();
       if (!overwrite) {
+        logInfo(`Note: Save cancelled due to conflict`);
         showStatus('Save cancelled');
         return;
       }
     }
 
     const updated = await updateNote(state.host, state.token, currentNote.owner, currentNote.repo, currentNote.number, data);
+    logInfo(`Note: Save successful for #${currentNote.number}: "${updated.title}"`);
     originalBody = updated.body ?? '';
     originalTitle = updated.title;
     loadedUpdatedAt = updated.updated_at;
     currentNote = { ...updated, owner: currentNote.owner, repo: currentNote.repo };
     showStatus('Saved');
   } catch (err) {
-    showStatus(`Save failed: ${err instanceof Error ? err.message : err}`, true);
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(`Note: Save failed for #${currentNote.number}: ${msg}`);
+    showStatus(`Save failed: ${msg}`, true);
   }
 }
 
@@ -1352,6 +1375,7 @@ async function handleAttachmentUpload(): Promise<void> {
     for (const file of files) {
       try {
         showStatus(`Uploading ${uploadedLinks.length + 1}/${files.length}...`);
+        logInfo(`Attachment: Uploading ${file.name}`);
 
         // Read as ArrayBuffer and base64-encode in chunks (safe for large files)
         const buffer = await file.arrayBuffer();
@@ -1369,6 +1393,8 @@ async function handleAttachmentUpload(): Promise<void> {
           file.name, base64, existingShas[file.name],
         );
 
+        logInfo(`Attachment: Uploaded ${file.name} (${file.size} bytes)`);
+
         const rawUrl = rawContentUrl(
           state!.host, ar.owner, ar.repo,
           `${currentNote!.owner}/${currentNote!.repo}/${currentNote!.number}/${file.name}`,
@@ -1383,6 +1409,8 @@ async function handleAttachmentUpload(): Promise<void> {
           currentAttachments.push(attachment);
         }
       } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`Attachment: Upload failed for ${file.name}: ${msg}`);
         failed.push(file.name);
       }
     }
@@ -1495,7 +1523,9 @@ async function deleteSelectedAttachments(): Promise<void> {
     for (const idx of indices) {
       const a = currentAttachments[idx];
       if (!a) continue;
+      logInfo(`Attachment: Deleting ${a.name} from note #${currentNote?.number}`);
       await deleteAttachment(state.host, state.token, ar.owner, ar.repo, a.path, a.sha);
+      logInfo(`Attachment: Deleted ${a.name}`);
     }
     showStatus(names.length === 1 ? 'Deleted' : `Deleted ${names.length} attachments`);
 
@@ -1509,6 +1539,8 @@ async function deleteSelectedAttachments(): Promise<void> {
     if (listEl) renderAttachmentRows(listEl);
     document.getElementById('attachment-panel')?.focus();
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(`Attachment: Delete failed for ${names.join(', ')}: ${msg}`);
     showStatus(`Delete failed: ${err instanceof Error ? err.message : err}`, true);
     document.getElementById('attachment-panel')?.focus();
   }
