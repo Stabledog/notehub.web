@@ -99,6 +99,10 @@ export async function init(): Promise<void> {
 
     try {
       veditor = await import(/* @vite-ignore */ `${VEDITOR_BASE}/veditor.js`);
+      const badge = document.getElementById('version-badge');
+      if (badge && veditor.VERSION) {
+        badge.textContent += ` \u00b7 ve${veditor.VERSION}`;
+      }
     } catch (err) {
       app.innerHTML = `<div class="auth-screen"><h1>notehub</h1><p class="error">Failed to load editor from ${VEDITOR_BASE}/veditor.js: ${err instanceof Error ? err.message : err}</p></div>`;
       return;

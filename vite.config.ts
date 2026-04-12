@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import pkg from './package.json';
 
 const base = process.env.VITE_BASE;
 if (!base) {
@@ -13,6 +14,9 @@ if (!base) {
 
 export default defineConfig({
   base,
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   build: {
     sourcemap: true,
   },

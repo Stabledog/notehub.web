@@ -774,3 +774,14 @@ thead th {
   color: var(--base);
   border-color: var(--red);
 }
+
+.version-badge {
+  position: fixed;
+  bottom: 10px;
+  right: 60px;
+  font-size: 10px;
+  opacity: 0.3;
+  pointer-events: none;
+  z-index: 9999;
+  color: #999;
+}

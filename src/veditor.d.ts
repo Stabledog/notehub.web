@@ -1,5 +1,7 @@
 /** Type declarations for veditor.web runtime import. */
 
+export const VERSION: string;
+
 export interface VEditorCallbacks {
   onSave: () => Promise<void>;
   onQuit: () => void;
