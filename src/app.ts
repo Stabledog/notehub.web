@@ -1,4 +1,5 @@
 import { validateToken, repoExists, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentBlob, fetchAttachmentCounts, getAttachmentsRepoInfo, rawContentUrl, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
+import { logError, logInfo, createLogViewer } from './logging-client';
 
 
 const LS_TOKEN = 'notehub:token';
@@ -255,6 +256,7 @@ async function showNoteList(): Promise<void> {
         <h1>notehub</h1>
         <div class="header-info">
           <span>@${state.username}</span>
+          <button id="logs-btn" title="View debug logs">Logs</button>
           <button id="sign-out">Sign out</button>
         </div>
       </header>
@@ -627,6 +629,10 @@ async function showNoteList(): Promise<void> {
 
   document.getElementById('refresh')!.addEventListener('click', () => showNoteList());
 
+  document.getElementById('logs-btn')!.addEventListener('click', () => {
+    document.body.appendChild(createLogViewer());
+  });
+
   try {
     notesList = await searchNotes(state.host, state.token);
 
@@ -904,6 +910,7 @@ function renderEditor(title: string, body: string): void {
         <span id="note-number">${currentNote ? `<a href="${escapeAttr(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>` : 'Title'}</span>
         ${currentNote ? `<button id="copy-note-url" class="copy-url-btn" title="Copy issue URL">${clipboardIcon}</button>` : ''}
         ${currentNote ? `<button id="attachment-toggle-btn" class="attachment-toggle-btn" title="Attachments (ga)">${paperclipIcon}</button>` : ''}
+        ${currentNote ? `<button id="delete-note-btn" class="delete-note-btn" title="Delete note">${xIcon}</button>` : ''}
         <span id="status-msg"></span>
       </header>
       <div id="editor-container"></div>
@@ -926,6 +933,8 @@ function renderEditor(title: string, body: string): void {
   }
 
   document.getElementById('attachment-toggle-btn')?.addEventListener('click', () => toggleAttachmentPanel());
+
+  document.getElementById('delete-note-btn')?.addEventListener('click', () => handleDelete());
 
   titleHandle = veditor.createVimInput(
     document.getElementById('note-title-container')!,
@@ -1032,6 +1041,37 @@ async function handleSave(): Promise<void> {
     showStatus('Saved');
   } catch (err) {
     showStatus(`Save failed: ${err instanceof Error ? err.message : err}`, true);
+  }
+}
+
+async function handleDelete(): Promise<void> {
+  if (!state || !currentNote) return;
+
+  const confirmed = confirm(`Delete note "#${currentNote.number}: ${originalTitle}"?`);
+  if (!confirmed) return;
+
+  try {
+    showStatus('Deleting...');
+    const result = await archiveNote(state.host, state.token, currentNote.owner, currentNote.repo, currentNote.number);
+
+    // Verify the note was actually closed
+    if (result.state !== 'closed') {
+      const msg = 'Delete failed: note was not closed';
+      showStatus(msg, true);
+      logError(msg);
+      return;
+    }
+
+    logInfo(`Deleted note #${currentNote.number}: ${originalTitle}`);
+    showStatus('Deleted');
+    // Give user brief moment to see the status message, then return to list
+    setTimeout(() => {
+      showNoteList();
+    }, 500);
+  } catch (err) {
+    const msg = `Delete failed: ${err instanceof Error ? err.message : err}`;
+    showStatus(msg, true);
+    logError(msg);
   }
 }
 
@@ -1292,59 +1332,77 @@ async function handleAttachmentUpload(): Promise<void> {
 
   const input = document.createElement('input');
   input.type = 'file';
+  input.multiple = true;
   input.onchange = async () => {
-    const file = input.files?.[0];
-    if (!file) return;
+    const files = Array.from(input.files || []);
+    if (files.length === 0) return;
 
-    // Read as ArrayBuffer and base64-encode in chunks (safe for large files)
-    const buffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    const CHUNK = 8192;
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += CHUNK) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-    }
-    const base64 = btoa(binary);
-
-    // Fetch current SHA without re-rendering — handles files uploaded outside
-    // this session or before the panel was opened.
-    let existingSha: string | undefined;
+    // Fetch current SHA list once for all files
+    let existingShas: Record<string, string> = {};
     try {
       const fresh = await listAttachments(
         state!.host, state!.token, ar.owner, ar.repo, currentNote!.owner, currentNote!.repo, currentNote!.number,
       );
-      existingSha = fresh.find(a => a.name === file.name)?.sha;
-    } catch { /* ignore — treat as new file */ }
+      existingShas = Object.fromEntries(fresh.map(a => [a.name, a.sha]));
+    } catch { /* ignore — treat as new files */ }
 
-    try {
-      showStatus('Uploading...');
-      const attachment = await uploadAttachment(
-        state!.host, state!.token, ar.owner, ar.repo,
-        currentNote!.owner, currentNote!.repo, currentNote!.number,
-        file.name, base64, existingSha,
-      );
+    const uploadedLinks: string[] = [];
+    const failed: string[] = [];
 
-      const rawUrl = rawContentUrl(
-        state!.host, ar.owner, ar.repo,
-        `${currentNote!.owner}/${currentNote!.repo}/${currentNote!.number}/${file.name}`,
-      );
-      navigator.clipboard.writeText(`[${file.name}](${rawUrl})`);
-      showStatus('Uploaded — link copied');
+    for (const file of files) {
+      try {
+        showStatus(`Uploading ${uploadedLinks.length + 1}/${files.length}...`);
 
-      // Update list optimistically from the upload response — no second fetch needed.
-      const existingIdx = currentAttachments.findIndex(a => a.name === file.name);
-      if (existingIdx >= 0) {
-        currentAttachments[existingIdx] = attachment;
-      } else {
-        currentAttachments.push(attachment);
+        // Read as ArrayBuffer and base64-encode in chunks (safe for large files)
+        const buffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        const CHUNK = 8192;
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += CHUNK) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+        }
+        const base64 = btoa(binary);
+
+        const attachment = await uploadAttachment(
+          state!.host, state!.token, ar.owner, ar.repo,
+          currentNote!.owner, currentNote!.repo, currentNote!.number,
+          file.name, base64, existingShas[file.name],
+        );
+
+        const rawUrl = rawContentUrl(
+          state!.host, ar.owner, ar.repo,
+          `${currentNote!.owner}/${currentNote!.repo}/${currentNote!.number}/${file.name}`,
+        );
+        uploadedLinks.push(`[${file.name}](${rawUrl})`);
+
+        // Update list optimistically from the upload response
+        const existingIdx = currentAttachments.findIndex(a => a.name === file.name);
+        if (existingIdx >= 0) {
+          currentAttachments[existingIdx] = attachment;
+        } else {
+          currentAttachments.push(attachment);
+        }
+      } catch (err) {
+        failed.push(file.name);
       }
-      const listEl = document.getElementById('attachment-list');
-      if (listEl) renderAttachmentRows(listEl);
-      document.getElementById('attachment-panel')?.focus();
-    } catch (err) {
-      showStatus(`Upload failed: ${err instanceof Error ? err.message : err}`, true);
-      document.getElementById('attachment-panel')?.focus();
     }
+
+    // Update UI
+    const listEl = document.getElementById('attachment-list');
+    if (listEl) renderAttachmentRows(listEl);
+
+    // Copy all uploaded links to clipboard
+    if (uploadedLinks.length > 0) {
+      navigator.clipboard.writeText(uploadedLinks.join('\n'));
+      const msg = uploadedLinks.length === 1
+        ? 'Uploaded — link copied'
+        : `Uploaded ${uploadedLinks.length} files — links copied`;
+      showStatus(failed.length > 0 ? `${msg} (${failed.length} failed)` : msg);
+    } else {
+      showStatus(`Upload failed: ${failed.join(', ')}`, true);
+    }
+
+    document.getElementById('attachment-panel')?.focus();
   };
   input.click();
 }
