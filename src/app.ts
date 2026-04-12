@@ -517,15 +517,16 @@ async function showNoteList(): Promise<void> {
 
     container.innerHTML = `
       <table>
-        <thead><tr><th>Repo</th><th>#</th><th>Title</th><th>Context</th><th>Updated</th></tr></thead>
+        <thead><tr><th>Title</th><th>#</th><th></th><th>Context</th><th>Updated</th><th>Repo</th></tr></thead>
         <tbody>
           ${matches.map((m, i) => `
             <tr class="note-row" data-index="${m.index}" data-result-index="${i}">
-              <td>${escapeHtml(m.note.owner)}/${escapeHtml(m.note.repo)}</td>
-              <td>${m.note.number}</td>
               <td>${escapeHtml(m.note.title)}</td>
+              <td>${m.note.number}</td>
+              <td></td>
               <td class="search-context">${m.context}</td>
               <td>${new Date(m.note.updated_at).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}</td>
+              <td><span title="${escapeAttr(m.note.owner)}/${escapeAttr(m.note.repo)}">${escapeHtml(m.note.repo)}</span></td>
             </tr>
           `).join('')}
         </tbody>
@@ -660,16 +661,16 @@ async function showNoteList(): Promise<void> {
 
     container.innerHTML = `
       <table>
-        <thead><tr><th>Repo</th><th>#</th><th>Title</th><th>Updated</th><th></th></tr></thead>
+        <thead><tr><th>Title</th><th>#</th><th></th><th>Updated</th><th></th><th>Repo</th></tr></thead>
         <tbody>
           ${notesList.map((n, i) => `
             <tr class="note-row" data-index="${i}">
-              <td>${escapeHtml(n.owner)}/${escapeHtml(n.repo)}</td>
-              <td><a href="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" target="${hashTarget(issueUrl(state!.host, n.owner, n.repo, n.number))}" class="issue-link" onclick="event.stopPropagation()">${n.number}</a></td>
               <td>${escapeHtml(n.title)}<span class="attachment-count-badge" data-owner="${escapeAttr(n.owner)}" data-repo="${escapeAttr(n.repo)}" data-issue="${n.number}"></span></td>
-              <td>${new Date(n.updated_at).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}</td>
+              <td><a href="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" target="${hashTarget(issueUrl(state!.host, n.owner, n.repo, n.number))}" class="issue-link" onclick="event.stopPropagation()">${n.number}</a></td>
               <td><button class="copy-url-btn" data-url="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" title="Copy issue URL">${clipboardIcon}</button></td>
+              <td>${new Date(n.updated_at).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}</td>
               <td><button class="context-menu-btn" data-index="${i}" title="More actions">&#x2026;</button></td>
+              <td><span title="${escapeAttr(n.owner)}/${escapeAttr(n.repo)}">${escapeHtml(n.repo)}</span></td>
             </tr>
           `).join('')}
         </tbody>
