@@ -1,5 +1,6 @@
 import { validateToken, repoExists, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentBlob, fetchAttachmentCounts, getAttachmentsRepoInfo, rawContentUrl, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
 import { logError, logWarn, logInfo, createLogViewer } from './logging-client';
+import { parseHash, buildHash, navigate, replaceRoute, startRouter, type Route } from './router';
 
 
 const LS_TOKEN = 'notehub:token';
@@ -88,6 +89,43 @@ let currentAttachments: Attachment[] = [];
 let selectedAttachmentIndex = 0;
 let multiSelectedAttachments = new Set<number>();
 
+// Routing state
+let currentScreen: 'list' | 'edit' | 'settings' | null = null;
+let currentEditKey: string | null = null; // "owner/repo/number"
+
+function dispatchRoute(route: Route): void {
+  if (!state) { showSettings(); return; }
+  switch (route.screen) {
+    case 'list':
+      if (currentScreen === 'list') return;
+      showNoteList();
+      break;
+    case 'edit': {
+      const key = `${route.owner}/${route.repo}/${route.number}`;
+      if (currentScreen === 'edit' && currentEditKey === key) return;
+      openNote(route.owner, route.repo, route.number);
+      break;
+    }
+    case 'new':
+      openNewNote(route.owner, route.repo);
+      break;
+  }
+}
+
+/** Open a note — Ctrl/Meta modifier opens in a new tab, otherwise navigates in-place. */
+function openNoteFromEvent(note: NoteSearchResult, e: { ctrlKey: boolean; metaKey: boolean }): void {
+  if (isMobile) {
+    window.open(issueUrl(state!.host, note.owner, note.repo, note.number) + '#new_comment_field', '_blank');
+    return;
+  }
+  const route: Route = { screen: 'edit', owner: note.owner, repo: note.repo, number: note.number };
+  if (e.ctrlKey || e.metaKey) {
+    window.open(`${location.pathname}${buildHash(route)}`, '_blank');
+  } else {
+    navigate(route);
+  }
+}
+
 const app = document.getElementById('app')!;
 
 export async function init(): Promise<void> {
@@ -116,7 +154,8 @@ export async function init(): Promise<void> {
     validateToken(host, token)
       .then(user => {
         state = { host, token, username: user.login };
-        showNoteList();
+        startRouter(dispatchRoute);
+        dispatchRoute(parseHash(location.hash));
       })
       .catch(() => showSettings());
   } else {
@@ -189,7 +228,8 @@ function showSettings(error?: string): void {
         localStorage.removeItem(LS_PINNED_ISSUE);
       }
 
-      showNoteList();
+      startRouter(dispatchRoute);
+      dispatchRoute(parseHash(location.hash));
     } catch (err) {
       logError(`Settings: Token validation failed for host=${host}: ${err instanceof Error ? err.message : err}`);
       showSettings(`Authentication failed: ${err instanceof Error ? err.message : err}`);
@@ -205,6 +245,9 @@ async function showNoteList(): Promise<void> {
   cleanupListKeys?.();
   cleanupListKeys = null;
   currentNote = null;
+  currentScreen = 'list';
+  currentEditKey = null;
+  replaceRoute({ screen: 'list' });
 
   if (!state) return;
 
@@ -276,7 +319,9 @@ async function showNoteList(): Promise<void> {
       e.preventDefault();
       const rows = container.querySelectorAll('.note-row');
       if (rows.length > 0) {
-        (rows[selectedIndex] as HTMLElement).click();
+        const idx = parseInt(rows[selectedIndex].getAttribute('data-index')!, 10);
+        const note = notesList[idx];
+        openNoteFromEvent(note, e);
       }
     } else if (e.key === 'Escape' && searchActive) {
       e.preventDefault();
@@ -501,14 +546,10 @@ async function showNoteList(): Promise<void> {
 
     // Bind click handlers for search result rows
     container.querySelectorAll('.note-row').forEach(row => {
-      row.addEventListener('click', () => {
+      row.addEventListener('click', (e) => {
         const idx = parseInt(row.getAttribute('data-index')!, 10);
         const note = notesList[idx];
-        if (isMobile) {
-          window.open(issueUrl(state!.host, note.owner, note.repo, note.number) + '#new_comment_field', '_blank');
-        } else {
-          openNote(note.owner, note.repo, note.number);
-        }
+        openNoteFromEvent(note, e as MouseEvent);
       });
     });
   }
@@ -569,14 +610,10 @@ async function showNoteList(): Promise<void> {
     });
 
     container.querySelectorAll('.note-row').forEach(row => {
-      row.addEventListener('click', () => {
+      row.addEventListener('click', (e) => {
         const idx = parseInt(row.getAttribute('data-index')!, 10);
         const note = notesList[idx];
-        if (isMobile) {
-          window.open(issueUrl(state!.host, note.owner, note.repo, note.number) + '#new_comment_field', '_blank');
-        } else {
-          openNote(note.owner, note.repo, note.number);
-        }
+        openNoteFromEvent(note, e as MouseEvent);
       });
     });
   }
@@ -706,14 +743,10 @@ async function showNoteList(): Promise<void> {
     });
 
     container.querySelectorAll('.note-row').forEach(row => {
-      row.addEventListener('click', () => {
+      row.addEventListener('click', (e) => {
         const idx = parseInt(row.getAttribute('data-index')!, 10);
         const note = notesList[idx];
-        if (isMobile) {
-          window.open(issueUrl(state!.host, note.owner, note.repo, note.number) + '#new_comment_field', '_blank');
-        } else {
-          openNote(note.owner, note.repo, note.number);
-        }
+        openNoteFromEvent(note, e as MouseEvent);
       });
     });
 
@@ -844,6 +877,9 @@ async function openNewNote(owner: string, repo: string): Promise<void> {
   }
   newNoteTarget = { owner, repo };
   currentNote = null;
+  currentScreen = 'edit';
+  currentEditKey = null;
+  replaceRoute({ screen: 'new', owner, repo });
   originalBody = DEFAULT_NEW_BODY;
   originalTitle = DEFAULT_NEW_TITLE;
   loadedUpdatedAt = null;
@@ -852,6 +888,9 @@ async function openNewNote(owner: string, repo: string): Promise<void> {
 
 async function openNote(owner: string, repo: string, number: number): Promise<void> {
   if (!state) return;
+  currentScreen = 'edit';
+  currentEditKey = `${owner}/${repo}/${number}`;
+  replaceRoute({ screen: 'edit', owner, repo, number });
 
   app.innerHTML = `<div class="editor-screen"><p>Loading note #${number}...</p></div>`;
 
@@ -921,7 +960,7 @@ function renderEditor(title: string, body: string): void {
 
   veditor.createEditor(document.getElementById('editor-container')!, body, {
     onSave: handleSave,
-    onQuit: () => showNoteList(),
+    onQuit: () => navigate({ screen: 'list' }),
     isAppDirty: () => titleHandle!.getValue().trim() !== originalTitle,
   }, {
     storagePrefix: 'notehub',
@@ -970,7 +1009,9 @@ async function handleSave(): Promise<void> {
       originalBody = created.body ?? '';
       originalTitle = created.title;
       loadedUpdatedAt = created.updated_at;
-      // Update header to show issue number
+      // Update URL and header to show real issue number
+      currentEditKey = `${currentNote.owner}/${currentNote.repo}/${currentNote.number}`;
+      replaceRoute({ screen: 'edit', owner: currentNote.owner, repo: currentNote.repo, number: currentNote.number });
       const numEl = document.getElementById('note-number');
       if (numEl) {
         numEl.innerHTML = `<a href="${escapeAttr(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>`;
@@ -1049,7 +1090,7 @@ async function handleDelete(): Promise<void> {
     showStatus('Deleted');
     // Give user brief moment to see the status message, then return to list
     setTimeout(() => {
-      showNoteList();
+      navigate({ screen: 'list' });
     }, 500);
   } catch (err) {
     const msg = `Delete failed: ${err instanceof Error ? err.message : err}`;
