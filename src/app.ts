@@ -105,138 +105,95 @@ export async function init(): Promise<void> {
         badge.textContent += ` \u00b7 ve${veditor.VERSION}`;
       }
     } catch (err) {
-      app.innerHTML = `<div class="auth-screen"><h1>notehub</h1><p class="error">Failed to load editor from ${VEDITOR_BASE}/veditor.js: ${err instanceof Error ? err.message : err}</p></div>`;
-      return;
+      logError(`Failed to load editor from ${VEDITOR_BASE}/veditor.js: ${err instanceof Error ? err.message : err}`);
     }
   }
 
   const token = localStorage.getItem(LS_TOKEN);
   const host = localStorage.getItem(LS_HOST) ?? DEFAULT_HOST;
 
-  if (token) {
+  if (token && isSetupComplete()) {
     validateToken(host, token)
       .then(user => {
         state = { host, token, username: user.login };
-        if (!isSetupComplete()) {
-          showSetup();
-        } else {
-          showNoteList();
-        }
+        showNoteList();
       })
-      .catch(() => showAuth());
+      .catch(() => showSettings());
   } else {
-    showAuth();
+    showSettings();
   }
 }
 
-function showAuth(error?: string): void {
+function showSettings(error?: string): void {
   titleHandle?.destroy(); titleHandle = null;
   veditor?.destroyEditor();
+
   const savedHost = localStorage.getItem(LS_HOST) ?? DEFAULT_HOST;
+  const savedToken = localStorage.getItem(LS_TOKEN) ?? '';
+  const savedRepo = localStorage.getItem(LS_DEFAULT_REPO) ?? '';
+  const savedPinned = getPinnedIssue();
 
   app.innerHTML = `
     <div class="auth-screen">
       <h1>notehub</h1>
       <p>GitHub Issues as notes, with vi keybindings.</p>
       ${error ? `<div class="error">${error}</div>` : ''}
-      <form id="auth-form">
+      <form id="settings-form">
         <label>GitHub Host
-          <input type="text" id="host" value="${savedHost}" required />
+          <input type="text" id="settings-host" value="${escapeAttr(savedHost)}" required />
         </label>
         <label>Personal Access Token
-          <input type="password" id="pat" placeholder="ghp_..." required />
+          <input type="password" id="settings-pat" value="${escapeAttr(savedToken)}" placeholder="ghp_..." required />
         </label>
-        <button type="submit">Connect</button>
-      </form>
-    </div>
-  `;
-
-  document.getElementById('auth-form')!.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const host = (document.getElementById('host') as HTMLInputElement).value.trim();
-    const token = (document.getElementById('pat') as HTMLInputElement).value.trim();
-
-    try {
-      logInfo(`Auth: Attempting to validate token for host=${host}`);
-      const user = await validateToken(host, token);
-      logInfo(`Auth: Token validated for user ${user.login} on ${host}`);
-      localStorage.setItem(LS_HOST, host);
-      localStorage.setItem(LS_TOKEN, token);
-      state = { host, token, username: user.login };
-      if (!isSetupComplete()) {
-        showSetup();
-      } else {
-        showNoteList();
-      }
-    } catch (err) {
-      logError(`Auth: Token validation failed for host=${host}: ${err instanceof Error ? err.message : err}`);
-      showAuth(`Authentication failed: ${err instanceof Error ? err.message : err}`);
-    }
-  });
-}
-
-function showSetup(error?: string): void {
-  titleHandle?.destroy(); titleHandle = null;
-  veditor?.destroyEditor();
-  if (!state) return;
-
-  const suggestedRepo = `${state.username}/notehub.default`;
-  const suggestedAttach = getAttachmentsRepoInfo(suggestedRepo);
-
-  app.innerHTML = `
-    <div class="auth-screen">
-      <h1>notehub</h1>
-      <p>Welcome, @${state.username}! Configure your default repository for new notes.</p>
-      ${error ? `<div class="error">${error}</div>` : ''}
-      <form id="setup-form">
         <label>Default Repository
-          <input type="text" id="setup-repo" value="${suggestedRepo}" placeholder="owner/repo" required />
+          <input type="text" id="settings-repo" value="${escapeAttr(savedRepo)}" placeholder="owner/repo" required />
         </label>
         <label>Pinned Issue Number <span style="color:#6c7086">(optional)</span>
-          <input type="number" id="setup-pinned" placeholder="e.g. 7" min="1" />
+          <input type="number" id="settings-pinned" value="${savedPinned?.number ?? ''}" placeholder="e.g. 7" min="1" />
         </label>
-        <p id="attach-hint" style="color:#6c7086;font-size:0.8125rem;margin:0.5rem 0 0">To use file attachments, create a repo named <code>${suggestedAttach.owner}/${suggestedAttach.repo}</code></p>
         <button type="submit">Save &amp; Continue</button>
       </form>
     </div>
   `;
 
-  document.getElementById('setup-repo')!.addEventListener('input', () => {
-    const val = (document.getElementById('setup-repo') as HTMLInputElement).value.trim();
-    const hint = document.getElementById('attach-hint');
-    if (!hint) return;
-    const parts = val.split('/');
-    if (parts.length === 2 && parts[0] && parts[1]) {
-      const info = getAttachmentsRepoInfo(val);
-      hint.innerHTML = `To use file attachments, create a repo named <code>${info.owner}/${info.repo}</code>`;
-    }
-  });
-
-  document.getElementById('setup-form')!.addEventListener('submit', (e) => {
+  document.getElementById('settings-form')!.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const repoVal = (document.getElementById('setup-repo') as HTMLInputElement).value.trim();
-    const pinnedVal = (document.getElementById('setup-pinned') as HTMLInputElement).value.trim();
+    const host = (document.getElementById('settings-host') as HTMLInputElement).value.trim();
+    const token = (document.getElementById('settings-pat') as HTMLInputElement).value.trim();
+    const repoVal = (document.getElementById('settings-repo') as HTMLInputElement).value.trim();
+    const pinnedVal = (document.getElementById('settings-pinned') as HTMLInputElement).value.trim();
 
     const parts = repoVal.split('/');
     if (parts.length !== 2 || !parts[0] || !parts[1]) {
-      showSetup('Repository must be in owner/repo format.');
+      showSettings('Repository must be in owner/repo format.');
       return;
     }
 
-    localStorage.setItem(LS_DEFAULT_REPO, repoVal);
+    try {
+      logInfo(`Settings: Validating token for host=${host}`);
+      const user = await validateToken(host, token);
+      logInfo(`Settings: Token validated for user ${user.login} on ${host}`);
+      localStorage.setItem(LS_HOST, host);
+      localStorage.setItem(LS_TOKEN, token);
+      localStorage.setItem(LS_DEFAULT_REPO, repoVal);
+      state = { host, token, username: user.login };
 
-    if (pinnedVal) {
-      const num = parseInt(pinnedVal, 10);
-      if (isNaN(num) || num < 1) {
-        showSetup('Pinned issue must be a positive number.');
-        return;
+      if (pinnedVal) {
+        const num = parseInt(pinnedVal, 10);
+        if (isNaN(num) || num < 1) {
+          showSettings('Pinned issue must be a positive number.');
+          return;
+        }
+        localStorage.setItem(LS_PINNED_ISSUE, JSON.stringify({ owner: parts[0], repo: parts[1], number: num }));
+      } else {
+        localStorage.removeItem(LS_PINNED_ISSUE);
       }
-      localStorage.setItem(LS_PINNED_ISSUE, JSON.stringify({ owner: parts[0], repo: parts[1], number: num }));
-    } else {
-      localStorage.removeItem(LS_PINNED_ISSUE);
-    }
 
-    showNoteList();
+      showNoteList();
+    } catch (err) {
+      logError(`Settings: Token validation failed for host=${host}: ${err instanceof Error ? err.message : err}`);
+      showSettings(`Authentication failed: ${err instanceof Error ? err.message : err}`);
+    }
   });
 }
 
@@ -260,6 +217,7 @@ async function showNoteList(): Promise<void> {
         <div class="header-info">
           <span>@${state.username}</span>
           <button id="logs-btn" title="View debug logs">Logs</button>
+          <button id="settings-btn" title="Settings">Settings</button>
           <button id="sign-out">Sign out</button>
         </div>
       </header>
@@ -623,11 +581,13 @@ async function showNoteList(): Promise<void> {
     });
   }
 
+  document.getElementById('settings-btn')!.addEventListener('click', () => showSettings());
+
   document.getElementById('sign-out')!.addEventListener('click', () => {
     localStorage.removeItem(LS_TOKEN);
     localStorage.removeItem(LS_HOST);
     state = null;
-    showAuth();
+    showSettings();
   });
 
   document.getElementById('refresh')!.addEventListener('click', () => showNoteList());
