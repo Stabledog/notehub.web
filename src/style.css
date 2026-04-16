@@ -798,8 +798,10 @@ thead th {
   bottom: 10px;
   right: 60px;
   font-size: 10px;
-  opacity: 0.3;
   pointer-events: none;
   z-index: 9999;
-  color: #999;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.65);
+  padding: 2px 6px;
+  border-radius: 4px;
 }
