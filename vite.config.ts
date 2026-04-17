@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import { execSync } from 'child_process';
+import veditorDev from '../veditor.web/dev-plugin.js';
 import pkg from './package.json';
 
 const base = process.env.VITE_BASE;
@@ -21,7 +22,7 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(pkg.version),
     __BUILD_HASH__: JSON.stringify(buildHash),
   },
-  plugins: [{
+  plugins: [veditorDev(), {
     name: 'version-json',
     generateBundle() {
       this.emitFile({
