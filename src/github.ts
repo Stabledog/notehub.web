@@ -43,11 +43,12 @@ async function apiFetch<T>(host: string, token: string, path: string, init?: Req
     ...init,
     headers: { ...headers(token), ...init?.headers },
   });
+  const body = await res.text();
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GitHub API ${res.status}: ${text}`);
+    throw new Error(`GitHub API ${res.status}: ${body}`);
   }
-  return res.json() as Promise<T>;
+  // GitHub API returns \r\n in text fields; normalize to \n
+  return JSON.parse(body.replace(/\r\n/g, '\n')) as T;
 }
 
 export function validateToken(host: string, token: string): Promise<GitHubUser> {
