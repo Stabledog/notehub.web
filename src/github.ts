@@ -39,16 +39,27 @@ function headers(token: string): HeadersInit {
 export { DEFAULT_HOST };
 
 async function apiFetch<T>(host: string, token: string, path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${apiBase(host)}${path}`, {
-    ...init,
-    headers: { ...headers(token), ...init?.headers },
-  });
-  const body = await res.text();
-  if (!res.ok) {
-    throw new Error(`GitHub API ${res.status}: ${body}`);
+  let lastErr: Error | undefined;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(`${apiBase(host)}${path}`, {
+        ...init,
+        headers: { ...headers(token), ...init?.headers },
+      });
+      const body = await res.text();
+      if (!res.ok) {
+        throw new Error(`GitHub API ${res.status}: ${body}`);
+      }
+      // GitHub API returns \r\n in text fields; normalize to \n
+      return JSON.parse(body.replace(/\r\n/g, '\n')) as T;
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+      // Only retry on network-level errors, not API errors
+      if (lastErr.message.startsWith('GitHub API ')) throw lastErr;
+      if (attempt < 2) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+    }
   }
-  // GitHub API returns \r\n in text fields; normalize to \n
-  return JSON.parse(body.replace(/\r\n/g, '\n')) as T;
+  throw lastErr!;
 }
 
 export function validateToken(host: string, token: string): Promise<GitHubUser> {
