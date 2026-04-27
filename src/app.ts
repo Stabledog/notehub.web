@@ -559,11 +559,13 @@ async function showNoteList(): Promise<void> {
     container.querySelectorAll('.copy-url-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const url = (btn as HTMLElement).dataset.url!;
-        navigator.clipboard.writeText(url).then(() => {
-          btn.innerHTML = checkIcon;
-          setTimeout(() => { btn.innerHTML = clipboardIcon; }, 1500);
-        });
+        const idx = parseInt((btn as HTMLElement).dataset.index!, 10);
+        const note = notesList[idx];
+        showCopyMenu(
+          btn as HTMLElement,
+          notehubUrl(note.owner, note.repo, note.number),
+          issueUrl(state!.host, note.owner, note.repo, note.number),
+        );
       });
     });
 
@@ -676,7 +678,7 @@ async function showNoteList(): Promise<void> {
             <tr class="note-row" data-index="${i}">
               <td>${escapeHtml(n.title)}<span class="attachment-count-badge" data-owner="${escapeAttr(n.owner)}" data-repo="${escapeAttr(n.repo)}" data-issue="${n.number}"></span></td>
               <td><a href="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" target="${hashTarget(issueUrl(state!.host, n.owner, n.repo, n.number))}" class="issue-link" onclick="event.stopPropagation()">${n.number}</a></td>
-              <td><button class="copy-url-btn" data-url="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" title="Copy issue URL">${clipboardIcon}</button></td>
+              <td><button class="copy-url-btn" data-index="${i}" title="Copy URL">${clipboardIcon}</button></td>
               <td>${new Date(n.updated_at).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}</td>
               <td><button class="context-menu-btn" data-index="${i}" title="More actions">&#x2026;</button></td>
               <td><span title="${escapeAttr(n.owner)}/${escapeAttr(n.repo)}">${escapeHtml(n.repo)}</span></td>
@@ -689,11 +691,13 @@ async function showNoteList(): Promise<void> {
     container.querySelectorAll('.copy-url-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const url = (btn as HTMLElement).dataset.url!;
-        navigator.clipboard.writeText(url).then(() => {
-          btn.innerHTML = checkIcon;
-          setTimeout(() => { btn.innerHTML = clipboardIcon; }, 1500);
-        });
+        const idx = parseInt((btn as HTMLElement).dataset.index!, 10);
+        const note = notesList[idx];
+        showCopyMenu(
+          btn as HTMLElement,
+          notehubUrl(note.owner, note.repo, note.number),
+          issueUrl(state!.host, note.owner, note.repo, note.number),
+        );
       });
     });
 
@@ -920,7 +924,7 @@ function renderEditor(title: string, body: string): void {
         <button id="back-to-list" title="Back to notes">&larr;</button>
         <div id="note-title-container"></div>
         <span id="note-number">${currentNote ? `<a href="${escapeAttr(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>` : 'Title'}</span>
-        ${currentNote ? `<button id="copy-note-url" class="copy-url-btn" title="Copy issue URL">${clipboardIcon}</button>` : ''}
+        ${currentNote ? `<button id="copy-note-url" class="copy-url-btn" title="Copy URL">${clipboardIcon}</button>` : ''}
         ${currentNote ? `<button id="attachment-toggle-btn" class="attachment-toggle-btn" title="Attachments (ga)">${paperclipIcon}</button>` : ''}
         ${currentNote ? `<button id="delete-note-btn" class="delete-note-btn" title="Delete note">${xIcon}</button>` : ''}
         <span id="status-msg"></span>
@@ -935,12 +939,13 @@ function renderEditor(title: string, body: string): void {
 
   const copyBtn = document.getElementById('copy-note-url');
   if (copyBtn && currentNote) {
-    const url = issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number);
+    const note = currentNote;
     copyBtn.addEventListener('click', () => {
-      navigator.clipboard.writeText(url).then(() => {
-        copyBtn.innerHTML = checkIcon;
-        setTimeout(() => { copyBtn.innerHTML = clipboardIcon; }, 1500);
-      });
+      showCopyMenu(
+        copyBtn as HTMLElement,
+        notehubUrl(note.owner, note.repo, note.number),
+        issueUrl(state!.host, note.owner, note.repo, note.number),
+      );
     });
   }
 
@@ -1575,8 +1580,59 @@ const checkIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" s
 const xIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 const externalIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
 
+function copyText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  // Fallback for insecure contexts (http://)
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  ta.remove();
+  return Promise.resolve();
+}
+
 function issueUrl(host: string, owner: string, repo: string, number: number): string {
   return `https://${host}/${owner}/${repo}/issues/${number}`;
+}
+
+function notehubUrl(owner: string, repo: string, number: number): string {
+  return `${location.origin}${location.pathname}${buildHash({ screen: 'edit', owner, repo, number })}`;
+}
+
+function showCopyMenu(btn: HTMLElement, nhUrl: string, ghUrl: string): void {
+  // Close any existing copy menu
+  document.querySelector('.copy-url-menu')?.remove();
+
+  const rect = btn.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'note-context-menu copy-url-menu';
+  menu.innerHTML = `
+    <button class="copy-menu-btn" data-url="${escapeAttr(nhUrl)}">Notehub URL</button>
+    <button class="copy-menu-btn" data-url="${escapeAttr(ghUrl)}">GitHub URL</button>
+  `;
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.left = `${rect.right}px`;
+  document.body.appendChild(menu);
+
+  const closeMenu = () => { menu.remove(); document.removeEventListener('click', closeMenu); };
+  setTimeout(() => document.addEventListener('click', closeMenu), 0);
+
+  menu.querySelectorAll('.copy-menu-btn').forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeMenu();
+      const url = (item as HTMLElement).dataset.url!;
+      copyText(url).then(() => {
+        btn.innerHTML = checkIcon;
+        setTimeout(() => { btn.innerHTML = clipboardIcon; }, 1500);
+      });
+    });
+  });
 }
 
 function hashTarget(url: string): string {
