@@ -1427,11 +1427,19 @@ async function handleAttachmentUpload(): Promise<void> {
 
     // Copy all uploaded links to clipboard
     if (uploadedLinks.length > 0) {
-      navigator.clipboard.writeText(uploadedLinks.join('\n'));
-      const msg = uploadedLinks.length === 1
-        ? 'Uploaded — link copied'
-        : `Uploaded ${uploadedLinks.length} files — links copied`;
-      showStatus(failed.length > 0 ? `${msg} (${failed.length} failed)` : msg);
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(uploadedLinks.join('\n'));
+        copied = true;
+      } catch (err) {
+        logError(`Attachment: clipboard write failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      const base = uploadedLinks.length === 1
+        ? (copied ? 'Uploaded — link copied' : 'Uploaded — copy to clipboard failed')
+        : (copied
+            ? `Uploaded ${uploadedLinks.length} files — links copied`
+            : `Uploaded ${uploadedLinks.length} files — copy to clipboard failed`);
+      showStatus(failed.length > 0 ? `${base} (${failed.length} failed)` : base, !copied);
     } else {
       showStatus(`Upload failed: ${failed.join(', ')}`, true);
     }
