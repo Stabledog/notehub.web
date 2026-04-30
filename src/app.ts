@@ -172,6 +172,8 @@ function showSettings(error?: string): void {
   const savedRepo = localStorage.getItem(LS_DEFAULT_REPO) ?? '';
   const savedPinned = getPinnedIssue();
 
+  const canCancel = state !== null;
+
   app.innerHTML = `
     <div class="auth-screen">
       <h1>notehub</h1>
@@ -190,10 +192,22 @@ function showSettings(error?: string): void {
         <label>Pinned Issue Number <span style="color:#6c7086">(optional)</span>
           <input type="number" id="settings-pinned" value="${savedPinned?.number ?? ''}" placeholder="e.g. 7" min="1" />
         </label>
-        <button type="submit">Save &amp; Continue</button>
+        <div class="settings-actions">
+          <button type="submit">Save &amp; Continue</button>
+          ${canCancel ? '<button type="button" id="settings-cancel">Cancel</button>' : ''}
+        </div>
       </form>
     </div>
   `;
+
+  if (canCancel) {
+    const cancelBack = () => showNoteList();
+    document.getElementById('settings-cancel')!.addEventListener('click', cancelBack);
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { document.removeEventListener('keydown', onEsc); cancelBack(); }
+    };
+    document.addEventListener('keydown', onEsc);
+  }
 
   document.getElementById('settings-form')!.addEventListener('submit', async (e) => {
     e.preventDefault();

@@ -79,6 +79,27 @@ body {
   background: #74c7ec;
 }
 
+.settings-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.settings-actions button[type="submit"] {
+  flex: 1;
+}
+
+.settings-actions button[type="button"] {
+  flex: 0 0 auto;
+  background: #313244;
+  color: #a6adc8;
+  border: 1px solid #45475a;
+}
+
+.settings-actions button[type="button"]:hover {
+  background: #45475a;
+  color: #cdd6f4;
+}
+
 /* Note list */
 .note-list-screen {
   display: flex;
