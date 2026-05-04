@@ -1,7 +1,12 @@
 import { defineConfig } from 'vite';
 import { execSync } from 'child_process';
-import veditorDev from '../veditor.web/dev-plugin.js';
+import { existsSync } from 'fs';
 import pkg from './package.json';
+
+const devPluginPath = new URL('../veditor.web/dev-plugin.js', import.meta.url);
+const veditorDev = existsSync(devPluginPath)
+  ? (await import(devPluginPath.href)).default
+  : () => ({ name: 'veditor-dev-noop' });
 
 const base = process.env.VITE_BASE;
 if (!base) {
