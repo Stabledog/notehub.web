@@ -161,6 +161,16 @@ export async function init(): Promise<void> {
   } else {
     showSettings();
   }
+
+  window.addEventListener('message', (e) => {
+    if (e.data?.type !== 'barouse:activate') return;
+    const row = document.querySelector<HTMLElement>('.note-row.selected')
+      ?? document.querySelector<HTMLElement>('.note-row');
+    if (row) {
+      row.tabIndex = -1;
+      row.focus();
+    }
+  });
 }
 
 function showSettings(error?: string): void {
