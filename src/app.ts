@@ -779,6 +779,11 @@ async function showNoteList(): Promise<void> {
     });
 
     updateSelection();
+    const firstRow = container.querySelector<HTMLElement>('.note-row.selected');
+    if (firstRow) {
+      firstRow.tabIndex = -1;
+      firstRow.focus();
+    }
 
     // Async: fetch attachment counts per unique repo and populate badges
     loadAttachmentBadges(notesList).catch(() => {});
