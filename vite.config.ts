@@ -19,7 +19,7 @@ if (!base) {
   );
 }
 
-const buildHash = execSync('../scripts/source-hash.sh').toString().trim();
+const buildHash = execSync('(git describe --always; git diff) | sha256sum | cut -c1-12').toString().trim();
 
 export default defineConfig({
   base,
