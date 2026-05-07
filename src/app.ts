@@ -127,11 +127,12 @@ export async function init(): Promise<void> {
   // Load veditor CSS + JS from Pages CDN
   const link = document.createElement('link');
   link.rel = 'stylesheet';
-  link.href = `${VEDITOR_BASE}/veditor.css`;
+  const cacheBust = `v=${Date.now()}`;
+  link.href = `${VEDITOR_BASE}/veditor.css?${cacheBust}`;
   document.head.appendChild(link);
 
   try {
-    veditor = await import(/* @vite-ignore */ `${VEDITOR_BASE}/veditor.js`);
+    veditor = await import(/* @vite-ignore */ `${VEDITOR_BASE}/veditor.js?${cacheBust}`);
     const badge = document.getElementById('version-badge');
     if (badge && veditor.VERSION) {
       badge.textContent += ` \u00b7 ve${veditor.VERSION}`;
