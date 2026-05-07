@@ -621,6 +621,11 @@ thead th {
   flex-shrink: 0;
 }
 
+.attachment-panel-dragover {
+  border-top: 2px dashed #89b4fa;
+  background: #1e1e3a;
+}
+
 .attachment-panel-header {
   display: flex;
   align-items: center;

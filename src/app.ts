@@ -1,4 +1,4 @@
-import { validateToken, repoExists, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentBlob, fetchAttachmentCounts, getAttachmentsRepoInfo, rawContentUrl, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
+import { validateToken, repoExists, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentBlob, fetchAttachmentCounts, getAttachmentsRepoInfo, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
 import { logError, logWarn, logInfo, createLogViewer } from './logging-client';
 import { parseHash, buildHash, navigate, replaceRoute, startRouter, type Route } from './router';
 
@@ -89,6 +89,8 @@ let currentAttachments: Attachment[] = [];
 let selectedAttachmentIndex = 0;
 let multiSelectedAttachments = new Set<number>();
 
+let inBarouse = false;
+
 // Routing state
 let currentScreen: 'list' | 'edit' | 'settings' | null = null;
 let currentEditKey: string | null = null; // "owner/repo/number"
@@ -164,6 +166,7 @@ export async function init(): Promise<void> {
 
   window.addEventListener('message', (e) => {
     if (e.data?.type !== 'barouse:activate') return;
+    inBarouse = true;
     const row = document.querySelector<HTMLElement>('.note-row.selected')
       ?? document.querySelector<HTMLElement>('.note-row');
     if (row) {
@@ -1281,6 +1284,20 @@ async function openAttachmentPanel(): Promise<void> {
     }
   });
 
+  panel.addEventListener('dragover', (e: DragEvent) => {
+    e.preventDefault();
+    panel.classList.add('attachment-panel-dragover');
+  });
+  panel.addEventListener('dragleave', () => {
+    panel.classList.remove('attachment-panel-dragover');
+  });
+  panel.addEventListener('drop', async (e: DragEvent) => {
+    e.preventDefault();
+    panel.classList.remove('attachment-panel-dragover');
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (files.length > 0) await uploadFiles(files);
+  });
+
   await refreshAttachmentList();
 }
 
@@ -1382,98 +1399,92 @@ function moveAttachmentSelection(delta: number): void {
   if (listEl) renderAttachmentRows(listEl);
 }
 
-async function handleAttachmentUpload(): Promise<void> {
-  if (!currentNote || !state) return;
+async function uploadFiles(files: File[]): Promise<void> {
+  if (!currentNote || !state || files.length === 0) return;
 
   const ar = await ensureAttachmentRepo();
   if (!ar) return;
 
+  // Fetch current SHA list once for all files
+  let existingShas: Record<string, string> = {};
+  try {
+    const fresh = await listAttachments(
+      state!.host, state!.token, ar.owner, ar.repo, currentNote!.owner, currentNote!.repo, currentNote!.number,
+    );
+    existingShas = Object.fromEntries(fresh.map(a => [a.name, a.sha]));
+  } catch { /* ignore — treat as new files */ }
+
+  const uploadedLinks: string[] = [];
+  const failed: string[] = [];
+
+  for (const file of files) {
+    try {
+      showStatus(`Uploading ${uploadedLinks.length + 1}/${files.length}...`);
+      logInfo(`Attachment: Uploading ${file.name}`);
+
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      const CHUNK = 8192;
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+      }
+      const base64 = btoa(binary);
+
+      const attachment = await uploadAttachment(
+        state!.host, state!.token, ar.owner, ar.repo,
+        currentNote!.owner, currentNote!.repo, currentNote!.number,
+        file.name, base64, existingShas[file.name],
+      );
+
+      logInfo(`Attachment: Uploaded ${file.name} (${file.size} bytes)`);
+
+      uploadedLinks.push(`[${file.name}](${attachment.download_url})`);
+
+      const existingIdx = currentAttachments.findIndex(a => a.name === file.name);
+      if (existingIdx >= 0) {
+        currentAttachments[existingIdx] = attachment;
+      } else {
+        currentAttachments.push(attachment);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logError(`Attachment: Upload failed for ${file.name}: ${msg}`);
+      failed.push(file.name);
+    }
+  }
+
+  const listEl = document.getElementById('attachment-list');
+  if (listEl) renderAttachmentRows(listEl);
+
+  if (uploadedLinks.length > 0) {
+    let copied = false;
+    try {
+      await copyText(uploadedLinks.join('\n'));
+      copied = true;
+    } catch (err) {
+      logError(`Attachment: clipboard write failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const base = uploadedLinks.length === 1
+      ? (copied ? 'Uploaded — link copied' : 'Uploaded')
+      : (copied
+          ? `Uploaded ${uploadedLinks.length} files — links copied`
+          : `Uploaded ${uploadedLinks.length} files`);
+    showStatus(failed.length > 0 ? `${base} (${failed.length} failed)` : base, failed.length > 0);
+  } else {
+    showStatus(`Upload failed: ${failed.join(', ')}`, true);
+  }
+
+  document.getElementById('attachment-panel')?.focus();
+}
+
+async function handleAttachmentUpload(): Promise<void> {
+  if (!currentNote || !state) return;
   const input = document.createElement('input');
   input.type = 'file';
   input.multiple = true;
   input.onchange = async () => {
-    const files = Array.from(input.files || []);
-    if (files.length === 0) return;
-
-    // Fetch current SHA list once for all files
-    let existingShas: Record<string, string> = {};
-    try {
-      const fresh = await listAttachments(
-        state!.host, state!.token, ar.owner, ar.repo, currentNote!.owner, currentNote!.repo, currentNote!.number,
-      );
-      existingShas = Object.fromEntries(fresh.map(a => [a.name, a.sha]));
-    } catch { /* ignore — treat as new files */ }
-
-    const uploadedLinks: string[] = [];
-    const failed: string[] = [];
-
-    for (const file of files) {
-      try {
-        showStatus(`Uploading ${uploadedLinks.length + 1}/${files.length}...`);
-        logInfo(`Attachment: Uploading ${file.name}`);
-
-        // Read as ArrayBuffer and base64-encode in chunks (safe for large files)
-        const buffer = await file.arrayBuffer();
-        const bytes = new Uint8Array(buffer);
-        const CHUNK = 8192;
-        let binary = '';
-        for (let i = 0; i < bytes.length; i += CHUNK) {
-          binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-        }
-        const base64 = btoa(binary);
-
-        const attachment = await uploadAttachment(
-          state!.host, state!.token, ar.owner, ar.repo,
-          currentNote!.owner, currentNote!.repo, currentNote!.number,
-          file.name, base64, existingShas[file.name],
-        );
-
-        logInfo(`Attachment: Uploaded ${file.name} (${file.size} bytes)`);
-
-        const rawUrl = rawContentUrl(
-          state!.host, ar.owner, ar.repo,
-          `${currentNote!.owner}/${currentNote!.repo}/${currentNote!.number}/${file.name}`,
-        );
-        uploadedLinks.push(`[${file.name}](${rawUrl})`);
-
-        // Update list optimistically from the upload response
-        const existingIdx = currentAttachments.findIndex(a => a.name === file.name);
-        if (existingIdx >= 0) {
-          currentAttachments[existingIdx] = attachment;
-        } else {
-          currentAttachments.push(attachment);
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logError(`Attachment: Upload failed for ${file.name}: ${msg}`);
-        failed.push(file.name);
-      }
-    }
-
-    // Update UI
-    const listEl = document.getElementById('attachment-list');
-    if (listEl) renderAttachmentRows(listEl);
-
-    // Copy all uploaded links to clipboard
-    if (uploadedLinks.length > 0) {
-      let copied = false;
-      try {
-        await navigator.clipboard.writeText(uploadedLinks.join('\n'));
-        copied = true;
-      } catch (err) {
-        logError(`Attachment: clipboard write failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      const base = uploadedLinks.length === 1
-        ? (copied ? 'Uploaded — link copied' : 'Uploaded — copy to clipboard failed')
-        : (copied
-            ? `Uploaded ${uploadedLinks.length} files — links copied`
-            : `Uploaded ${uploadedLinks.length} files — copy to clipboard failed`);
-      showStatus(failed.length > 0 ? `${base} (${failed.length} failed)` : base, !copied);
-    } else {
-      showStatus(`Upload failed: ${failed.join(', ')}`, true);
-    }
-
-    document.getElementById('attachment-panel')?.focus();
+    await uploadFiles(Array.from(input.files || []));
   };
   input.click();
 }
@@ -1618,10 +1629,13 @@ const xIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" strok
 const externalIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
 
 function copyText(text: string): Promise<void> {
+  if (inBarouse) {
+    window.postMessage({ type: 'barouse:clipboard-write', text }, '*');
+    return Promise.resolve();
+  }
   if (navigator.clipboard?.writeText) {
     return navigator.clipboard.writeText(text);
   }
-  // Fallback for insecure contexts (http://)
   const ta = document.createElement('textarea');
   ta.value = text;
   ta.style.position = 'fixed';
