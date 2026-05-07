@@ -5,14 +5,11 @@ import { parseHash, buildHash, navigate, replaceRoute, startRouter, type Route }
 
 const LS_TOKEN = 'notehub:token';
 
-// Touch device detection — used to skip veditor and open GitHub's editor instead
-const isMobile = window.matchMedia('(pointer: coarse)').matches;
-
 // veditor base URL — must be set via VITE_VEDITOR_BASE at build time.
 const VEDITOR_BASE = import.meta.env.VITE_VEDITOR_BASE as string | undefined;
 if (!VEDITOR_BASE) throw new Error('VITE_VEDITOR_BASE not set at build time');
 
-// veditor API — populated by init() before use (skipped on mobile).
+// veditor API — populated by init() before use.
 let veditor: typeof import('./veditor');
 const LS_HOST = 'notehub:host';
 const LS_DEFAULT_REPO = 'notehub:defaultRepo';
@@ -116,10 +113,6 @@ function dispatchRoute(route: Route): void {
 
 /** Open a note — Ctrl/Meta modifier opens in a new tab, otherwise navigates in-place. */
 function openNoteFromEvent(note: NoteSearchResult, e: { ctrlKey: boolean; metaKey: boolean }): void {
-  if (isMobile) {
-    window.open(issueUrl(state!.host, note.owner, note.repo, note.number) + '#new_comment_field', '_blank');
-    return;
-  }
   const route: Route = { screen: 'edit', owner: note.owner, repo: note.repo, number: note.number };
   if (e.ctrlKey || e.metaKey) {
     window.open(`${location.pathname}${buildHash(route)}`, '_blank');
@@ -131,22 +124,20 @@ function openNoteFromEvent(note: NoteSearchResult, e: { ctrlKey: boolean; metaKe
 const app = document.getElementById('app')!;
 
 export async function init(): Promise<void> {
-  // Load veditor CSS + JS from Pages CDN (skip on mobile — use GitHub's editor instead)
-  if (!isMobile) {
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = `${VEDITOR_BASE}/veditor.css`;
-    document.head.appendChild(link);
+  // Load veditor CSS + JS from Pages CDN
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = `${VEDITOR_BASE}/veditor.css`;
+  document.head.appendChild(link);
 
-    try {
-      veditor = await import(/* @vite-ignore */ `${VEDITOR_BASE}/veditor.js`);
-      const badge = document.getElementById('version-badge');
-      if (badge && veditor.VERSION) {
-        badge.textContent += ` \u00b7 ve${veditor.VERSION}`;
-      }
-    } catch (err) {
-      logError(`Failed to load editor from ${VEDITOR_BASE}/veditor.js: ${err instanceof Error ? err.message : err}`);
+  try {
+    veditor = await import(/* @vite-ignore */ `${VEDITOR_BASE}/veditor.js`);
+    const badge = document.getElementById('version-badge');
+    if (badge && veditor.VERSION) {
+      badge.textContent += ` \u00b7 ve${veditor.VERSION}`;
     }
+  } catch (err) {
+    logError(`Failed to load editor from ${VEDITOR_BASE}/veditor.js: ${err instanceof Error ? err.message : err}`);
   }
 
   const token = localStorage.getItem(LS_TOKEN);
@@ -901,10 +892,6 @@ function showRepoPicker(notesList: NoteSearchResult[]): void {
 }
 
 async function openNewNote(owner: string, repo: string): Promise<void> {
-  if (isMobile) {
-    window.open(`https://${state!.host}/${owner}/${repo}/issues/new`, '_blank');
-    return;
-  }
   if (!state) return;
   if (!await repoExists(state.host, state.token, owner, repo)) {
     logError(`Auth: Repo validation failed for ${owner}/${repo}`);
