@@ -989,6 +989,7 @@ function renderEditor(title: string, body: string): void {
     isAppDirty: () => titleHandle!.getValue().trim() !== originalTitle,
   }, {
     storagePrefix: 'notehub',
+    autoSaveMs: veditor.getAutoSaveMs(),
     normalMappings: {
       'gt': () => titleHandle!.focus(),
       'ga': () => toggleAttachmentPanel(),

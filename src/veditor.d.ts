@@ -14,6 +14,7 @@ export interface VEditorOptions {
   exCommands?: Record<string, (...args: unknown[]) => void>;
   normalMappings?: Record<string, () => void>;
   extensions?: unknown[];
+  autoSaveMs?: number;
 }
 
 export function createEditor(
@@ -34,6 +35,7 @@ export function isVimMode(): boolean;
 export function requestSave(): Promise<void>;
 export function requestQuit(force?: boolean): void;
 export function hashTarget(url: string): string;
+export function getAutoSaveMs(): number;
 
 export interface VimInputOptions {
   value?: string;
