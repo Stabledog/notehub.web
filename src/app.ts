@@ -71,17 +71,31 @@ async function ensureAttachmentRepo(): Promise<{ owner: string; repo: string } |
   return ar;
 }
 
-let state: AppState | null = null;
-let currentNote: NoteSearchResult | null = null;
-let newNoteTarget: { owner: string; repo: string } | null = null;
+interface NoteBuffer {
+  note: NoteSearchResult;
+  originalBody: string;
+  originalTitle: string;
+  loadedUpdatedAt: string | null;
+  attachments: Attachment[];
+  selectedAttachmentIndex: number;
+  multiSelectedAttachments: Set<number>;
+}
 
-let originalBody = '';
-let originalTitle = '';
-let loadedUpdatedAt: string | null = null;
+let state: AppState | null = null;
+let newNoteTarget: { owner: string; repo: string } | null = null;
 let justCreatedNote: NoteSearchResult | null = null;
 let titleHandle: ReturnType<typeof import('./veditor').createVimInput> | null = null;
 
-// Attachment panel state
+// Multi-buffer note state
+const noteBuffers = new Map<string, NoteBuffer>();
+let activeNoteKey: string | null = null; // "owner/repo/number"
+let lastFetchedNotesList: NoteSearchResult[] = []; // cache for onListDocuments
+
+function activeBuffer(): NoteBuffer | null {
+  return activeNoteKey ? (noteBuffers.get(activeNoteKey) ?? null) : null;
+}
+
+// Attachment panel state — always refers to the active buffer's note
 let currentAttachments: Attachment[] = [];
 let selectedAttachmentIndex = 0;
 let multiSelectedAttachments = new Set<number>();
@@ -263,7 +277,8 @@ async function showNoteList(): Promise<void> {
   veditor?.destroyEditor();
   cleanupListKeys?.();
   cleanupListKeys = null;
-  currentNote = null;
+  noteBuffers.clear();
+  activeNoteKey = null;
   currentScreen = 'list';
   currentEditKey = null;
   replaceRoute({ screen: 'list' });
@@ -657,6 +672,7 @@ async function showNoteList(): Promise<void> {
   try {
     logInfo(`Note list: Fetching notes for all configured repos`);
     notesList = await searchNotes(state.host, state.token);
+    lastFetchedNotesList = notesList;
     logInfo(`Note list: Loaded ${notesList.length} notes`);
 
     // If we just created a note, the Search API may not have indexed it yet.
@@ -900,21 +916,31 @@ async function openNewNote(owner: string, repo: string): Promise<void> {
     return;
   }
   newNoteTarget = { owner, repo };
-  currentNote = null;
+  activeNoteKey = null;
   currentScreen = 'edit';
   currentEditKey = null;
   replaceRoute({ screen: 'new', owner, repo });
-  originalBody = DEFAULT_NEW_BODY;
-  originalTitle = DEFAULT_NEW_TITLE;
-  loadedUpdatedAt = null;
-  renderEditor(DEFAULT_NEW_TITLE, DEFAULT_NEW_BODY);
+  renderEditor(DEFAULT_NEW_TITLE, DEFAULT_NEW_BODY, null);
 }
 
 async function openNote(owner: string, repo: string, number: number): Promise<void> {
   if (!state) return;
   currentScreen = 'edit';
-  currentEditKey = `${owner}/${repo}/${number}`;
+  const key = `${owner}/${repo}/${number}`;
+  currentEditKey = key;
   replaceRoute({ screen: 'edit', owner, repo, number });
+
+  // If we already have a buffer for this note (e.g. via :ls picker), just switch to it
+  if (noteBuffers.has(key)) {
+    activeNoteKey = key;
+    const buf = noteBuffers.get(key)!;
+    if (currentScreen === 'edit' && document.querySelector('.editor-screen')) {
+      onBufferActivated(key, buf);
+    } else {
+      renderEditor(buf.note.title, buf.originalBody, buf);
+    }
+    return;
+  }
 
   app.innerHTML = `<div class="editor-screen"><p>Loading note #${number}...</p></div>`;
 
@@ -922,11 +948,19 @@ async function openNote(owner: string, repo: string, number: number): Promise<vo
     logInfo(`Note: Opening note #${number} from ${owner}/${repo}`);
     const note = await getNote(state.host, state.token, owner, repo, number);
     logInfo(`Note: Loaded note #${number}: "${note.title}"`);
-    currentNote = { ...note, owner, repo };
-    originalBody = note.body ?? '';
-    originalTitle = note.title;
-    loadedUpdatedAt = note.updated_at;
-    renderEditor(note.title, originalBody);
+    const noteResult = { ...note, owner, repo };
+    const buf: NoteBuffer = {
+      note: noteResult,
+      originalBody: note.body ?? '',
+      originalTitle: note.title,
+      loadedUpdatedAt: note.updated_at,
+      attachments: [],
+      selectedAttachmentIndex: 0,
+      multiSelectedAttachments: new Set(),
+    };
+    noteBuffers.set(key, buf);
+    activeNoteKey = key;
+    renderEditor(note.title, buf.originalBody, buf);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logError(`Note: Failed to load note #${number}: ${msg}`);
@@ -934,19 +968,189 @@ async function openNote(owner: string, repo: string, number: number): Promise<vo
   }
 }
 
-function renderEditor(title: string, body: string): void {
+/** Update header chrome and URL when a buffer becomes active (without re-rendering the editor). */
+function onBufferActivated(key: string, buf: NoteBuffer): void {
+  activeNoteKey = key;
+  currentEditKey = key;
+  const note = buf.note;
+  replaceRoute({ screen: 'edit', owner: note.owner, repo: note.repo, number: note.number });
+
+  titleHandle?.setValue(note.title);
+
+  const numEl = document.getElementById('note-number');
+  if (numEl) {
+    numEl.innerHTML = `<a href="${escapeAttr(issueUrl(state!.host, note.owner, note.repo, note.number))}" target="${hashTarget(issueUrl(state!.host, note.owner, note.repo, note.number))}" class="issue-link">#${note.number}</a>`;
+  }
+
+  // Sync attachment panel state to incoming buffer
+  currentAttachments = buf.attachments;
+  selectedAttachmentIndex = buf.selectedAttachmentIndex;
+  multiSelectedAttachments = buf.multiSelectedAttachments;
+  if (document.getElementById('attachment-panel')) {
+    closeAttachmentPanel();
+  }
+}
+
+function makeSaveCallback(getBuf: () => NoteBuffer | null): () => Promise<void> {
+  return async () => {
+    if (!state) return;
+
+    const body = veditor.getEditorContent();
+    const title = (titleHandle?.getValue() ?? '').trim();
+    const buf = getBuf();
+
+    // Creating a new note
+    if (!buf && newNoteTarget) {
+      if (!title) { showStatus('Title required', true); return; }
+      try {
+        showStatus('Creating...');
+        logInfo(`Note: Creating new note in ${newNoteTarget.owner}/${newNoteTarget.repo}`);
+        const created = await createNote(state.host, state.token, newNoteTarget.owner, newNoteTarget.repo, title, body);
+        logInfo(`Note: Created new note: #${created.number}`);
+        const noteResult = { ...created, owner: newNoteTarget.owner, repo: newNoteTarget.repo };
+        justCreatedNote = noteResult;
+        newNoteTarget = null;
+
+        const key = `${noteResult.owner}/${noteResult.repo}/${noteResult.number}`;
+        const newBuf: NoteBuffer = {
+          note: noteResult,
+          originalBody: created.body ?? '',
+          originalTitle: created.title,
+          loadedUpdatedAt: created.updated_at,
+          attachments: [],
+          selectedAttachmentIndex: 0,
+          multiSelectedAttachments: new Set(),
+        };
+        noteBuffers.set(key, newBuf);
+        activeNoteKey = key;
+        currentEditKey = key;
+        replaceRoute({ screen: 'edit', owner: noteResult.owner, repo: noteResult.repo, number: noteResult.number });
+
+        const numEl = document.getElementById('note-number');
+        if (numEl) {
+          numEl.innerHTML = `<a href="${escapeAttr(issueUrl(state.host, noteResult.owner, noteResult.repo, noteResult.number))}" target="${hashTarget(issueUrl(state.host, noteResult.owner, noteResult.repo, noteResult.number))}" class="issue-link">#${noteResult.number}</a>`;
+        }
+        showStatus('Created');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`Note: Failed to create note: ${msg}`);
+        showStatus(`Create failed: ${msg}`, true);
+      }
+      return;
+    }
+
+    if (!buf) return;
+
+    const data: { title?: string; body?: string } = {};
+    if (body !== buf.originalBody) data.body = body;
+    if (title !== buf.originalTitle) data.title = title;
+
+    if (Object.keys(data).length === 0) { showStatus('No changes'); return; }
+
+    try {
+      showStatus('Saving...');
+      logInfo(`Note: Save initiated for #${buf.note.number}`);
+
+      const fresh = await getNote(state.host, state.token, buf.note.owner, buf.note.repo, buf.note.number);
+      if (buf.loadedUpdatedAt && fresh.updated_at !== buf.loadedUpdatedAt) {
+        logWarn(`Note: Remote conflict detected for #${buf.note.number}; user chose to overwrite`);
+        const overwrite = await showConflictDialog();
+        if (!overwrite) { logInfo(`Note: Save cancelled due to conflict`); showStatus('Save cancelled'); return; }
+      }
+
+      const updated = await updateNote(state.host, state.token, buf.note.owner, buf.note.repo, buf.note.number, data);
+      logInfo(`Note: Save successful for #${buf.note.number}: "${updated.title}"`);
+      buf.originalBody = updated.body ?? '';
+      buf.originalTitle = updated.title;
+      buf.loadedUpdatedAt = updated.updated_at;
+      buf.note = { ...updated, owner: buf.note.owner, repo: buf.note.repo };
+      showStatus('Saved');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logError(`Note: Save failed for #${buf.note.number}: ${msg}`);
+      showStatus(`Save failed: ${msg}`, true);
+    }
+  };
+}
+
+function makeLoadDocumentCallback(): (id: string) => Promise<{ content: string; label: string; callbacks: import('./veditor').VEditorCallbacks }> {
+  return async (id: string) => {
+    if (!state) throw new Error('Not authenticated');
+
+    // Check if we already have a buffer for this note
+    if (noteBuffers.has(id)) {
+      const buf = noteBuffers.get(id)!;
+      return {
+        content: buf.originalBody,
+        label: buf.note.title,
+        callbacks: makeBufferCallbacks(() => noteBuffers.get(id) ?? null, id),
+      };
+    }
+
+    const parts = id.split('/');
+    if (parts.length !== 3) throw new Error(`Invalid document id: ${id}`);
+    const [owner, repo, numStr] = parts;
+    const number = parseInt(numStr, 10);
+
+    logInfo(`Note: Loading document ${id} for new buffer`);
+    const note = await getNote(state.host, state.token, owner, repo, number);
+    const noteResult = { ...note, owner, repo };
+    const buf: NoteBuffer = {
+      note: noteResult,
+      originalBody: note.body ?? '',
+      originalTitle: note.title,
+      loadedUpdatedAt: note.updated_at,
+      attachments: [],
+      selectedAttachmentIndex: 0,
+      multiSelectedAttachments: new Set(),
+    };
+    noteBuffers.set(id, buf);
+
+    return {
+      content: buf.originalBody,
+      label: note.title,
+      callbacks: makeBufferCallbacks(() => noteBuffers.get(id) ?? null, id),
+    };
+  };
+}
+
+function makeBufferCallbacks(getBuf: () => NoteBuffer | null, _id: string): import('./veditor').VEditorCallbacks {
+  return {
+    onSave: makeSaveCallback(getBuf),
+    onQuit: () => {
+      noteBuffers.clear();
+      navigate({ screen: 'list' });
+    },
+    isAppDirty: () => {
+      const buf = getBuf();
+      if (!buf) return false;
+      return titleHandle?.getValue().trim() !== buf.originalTitle;
+    },
+    onBufferSwitch: (newId: string) => {
+      const buf = noteBuffers.get(newId);
+      if (buf) onBufferActivated(newId, buf);
+    },
+    onListDocuments: async () =>
+      lastFetchedNotesList.map(n => ({ id: `${n.owner}/${n.repo}/${n.number}`, label: n.title })),
+    onLoadDocument: makeLoadDocumentCallback(),
+  };
+}
+
+function renderEditor(title: string, body: string, buf: NoteBuffer | null): void {
   cleanupListKeys?.();
   cleanupListKeys = null;
+
+  const note = buf?.note ?? null;
 
   app.innerHTML = `
     <div class="editor-screen">
       <header>
         <button id="back-to-list" title="Back to notes">&larr;</button>
         <div id="note-title-container"></div>
-        <span id="note-number">${currentNote ? `<a href="${escapeAttr(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state!.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>` : 'Title'}</span>
-        ${currentNote ? `<button id="copy-note-url" class="copy-url-btn" title="Copy URL">${clipboardIcon}</button>` : ''}
-        ${currentNote ? `<button id="attachment-toggle-btn" class="attachment-toggle-btn" title="Attachments (ga)">${paperclipIcon}</button>` : ''}
-        ${currentNote ? `<button id="delete-note-btn" class="delete-note-btn" title="Delete note">${xIcon}</button>` : ''}
+        <span id="note-number">${note ? `<a href="${escapeAttr(issueUrl(state!.host, note.owner, note.repo, note.number))}" target="${hashTarget(issueUrl(state!.host, note.owner, note.repo, note.number))}" class="issue-link">#${note.number}</a>` : 'Title'}</span>
+        ${note ? `<button id="copy-note-url" class="copy-url-btn" title="Copy URL">${clipboardIcon}</button>` : ''}
+        ${note ? `<button id="attachment-toggle-btn" class="attachment-toggle-btn" title="Attachments (ga)">${paperclipIcon}</button>` : ''}
+        ${note ? `<button id="delete-note-btn" class="delete-note-btn" title="Delete note">${xIcon}</button>` : ''}
         <span id="status-msg"></span>
       </header>
       <div id="editor-container"></div>
@@ -958,19 +1162,18 @@ function renderEditor(title: string, body: string): void {
   });
 
   const copyBtn = document.getElementById('copy-note-url');
-  if (copyBtn && currentNote) {
-    const note = currentNote;
+  if (copyBtn && note) {
+    const n = note;
     copyBtn.addEventListener('click', () => {
       showCopyMenu(
         copyBtn as HTMLElement,
-        notehubUrl(note.owner, note.repo, note.number),
-        issueUrl(state!.host, note.owner, note.repo, note.number),
+        notehubUrl(n.owner, n.repo, n.number),
+        issueUrl(state!.host, n.owner, n.repo, n.number),
       );
     });
   }
 
   document.getElementById('attachment-toggle-btn')?.addEventListener('click', () => toggleAttachmentPanel());
-
   document.getElementById('delete-note-btn')?.addEventListener('click', () => handleDelete());
 
   titleHandle = veditor.createVimInput(
@@ -983,13 +1186,19 @@ function renderEditor(title: string, body: string): void {
     },
   );
 
-  veditor.createEditor(document.getElementById('editor-container')!, body, {
-    onSave: handleSave,
-    onQuit: () => navigate({ screen: 'list' }),
-    isAppDirty: () => titleHandle!.getValue().trim() !== originalTitle,
-  }, {
+  // Snapshot the key at render time so the closure stays bound to this buffer
+  const initialKey = activeNoteKey;
+
+  const initialCallbacks = makeBufferCallbacks(
+    () => activeNoteKey ? (noteBuffers.get(activeNoteKey) ?? null) : null,
+    initialKey ?? '__new__',
+  );
+
+  veditor.createEditor(document.getElementById('editor-container')!, body, initialCallbacks, {
     storagePrefix: 'notehub',
     autoSaveMs: veditor.getAutoSaveMs(),
+    initialBufferId: initialKey ?? undefined,
+    initialBufferLabel: title,
     normalMappings: {
       'gt': () => titleHandle!.focus(),
       'ga': () => toggleAttachmentPanel(),
@@ -997,8 +1206,7 @@ function renderEditor(title: string, body: string): void {
   });
 
   // Auto-open attachment panel if the note already has attachments
-  if (currentNote) {
-    const note = currentNote;
+  if (note) {
     const ar = getAttachmentsRepo();
     if (ar) {
       listAttachments(state!.host, state!.token, ar.owner, ar.repo, note.owner, note.repo, note.number)
@@ -1012,99 +1220,19 @@ function renderEditor(title: string, body: string): void {
   }
 }
 
-async function handleSave(): Promise<void> {
-  if (!state) return;
-
-  const body = veditor.getEditorContent();
-  const title = (titleHandle?.getValue() ?? '').trim();
-
-  // Creating a new note
-  if (!currentNote && newNoteTarget) {
-    if (!title) {
-      showStatus('Title required', true);
-      return;
-    }
-    try {
-      showStatus('Creating...');
-      logInfo(`Note: Creating new note in ${newNoteTarget.owner}/${newNoteTarget.repo}`);
-      const created = await createNote(state.host, state.token, newNoteTarget.owner, newNoteTarget.repo, title, body);
-      logInfo(`Note: Created new note: #${created.number}`);
-      currentNote = { ...created, owner: newNoteTarget.owner, repo: newNoteTarget.repo };
-      justCreatedNote = currentNote;
-      newNoteTarget = null;
-      originalBody = created.body ?? '';
-      originalTitle = created.title;
-      loadedUpdatedAt = created.updated_at;
-      // Update URL and header to show real issue number
-      currentEditKey = `${currentNote.owner}/${currentNote.repo}/${currentNote.number}`;
-      replaceRoute({ screen: 'edit', owner: currentNote.owner, repo: currentNote.repo, number: currentNote.number });
-      const numEl = document.getElementById('note-number');
-      if (numEl) {
-        numEl.innerHTML = `<a href="${escapeAttr(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" target="${hashTarget(issueUrl(state.host, currentNote.owner, currentNote.repo, currentNote.number))}" class="issue-link">#${currentNote.number}</a>`;
-      }
-
-      showStatus('Created');
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logError(`Note: Failed to create note: ${msg}`);
-      showStatus(`Create failed: ${msg}`, true);
-    }
-    return;
-  }
-
-  if (!currentNote) return;
-
-  // Updating an existing note
-  const data: { title?: string; body?: string } = {};
-  if (body !== originalBody) data.body = body;
-  if (title !== originalTitle) data.title = title;
-
-  if (Object.keys(data).length === 0) {
-    showStatus('No changes');
-    return;
-  }
-
-  try {
-    showStatus('Saving...');
-    logInfo(`Note: Save initiated for #${currentNote.number}`);
-
-    // Check for remote changes before saving
-    const fresh = await getNote(state.host, state.token, currentNote.owner, currentNote.repo, currentNote.number);
-    if (loadedUpdatedAt && fresh.updated_at !== loadedUpdatedAt) {
-      logWarn(`Note: Remote conflict detected for #${currentNote.number}; user chose to overwrite`);
-      const overwrite = await showConflictDialog();
-      if (!overwrite) {
-        logInfo(`Note: Save cancelled due to conflict`);
-        showStatus('Save cancelled');
-        return;
-      }
-    }
-
-    const updated = await updateNote(state.host, state.token, currentNote.owner, currentNote.repo, currentNote.number, data);
-    logInfo(`Note: Save successful for #${currentNote.number}: "${updated.title}"`);
-    originalBody = updated.body ?? '';
-    originalTitle = updated.title;
-    loadedUpdatedAt = updated.updated_at;
-    currentNote = { ...updated, owner: currentNote.owner, repo: currentNote.repo };
-    showStatus('Saved');
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logError(`Note: Save failed for #${currentNote.number}: ${msg}`);
-    showStatus(`Save failed: ${msg}`, true);
-  }
-}
 
 async function handleDelete(): Promise<void> {
-  if (!state || !currentNote) return;
+  if (!state) return;
+  const buf = activeBuffer();
+  if (!buf) return;
 
-  const confirmed = confirm(`Delete note "#${currentNote.number}: ${originalTitle}"?`);
+  const confirmed = confirm(`Delete note "#${buf.note.number}: ${buf.originalTitle}"?`);
   if (!confirmed) return;
 
   try {
     showStatus('Deleting...');
-    const result = await archiveNote(state.host, state.token, currentNote.owner, currentNote.repo, currentNote.number);
+    const result = await archiveNote(state.host, state.token, buf.note.owner, buf.note.repo, buf.note.number);
 
-    // Verify the note was actually closed
     if (result.state !== 'closed') {
       const msg = 'Delete failed: note was not closed';
       showStatus(msg, true);
@@ -1112,12 +1240,9 @@ async function handleDelete(): Promise<void> {
       return;
     }
 
-    logInfo(`Deleted note #${currentNote.number}: ${originalTitle}`);
+    logInfo(`Deleted note #${buf.note.number}: ${buf.originalTitle}`);
     showStatus('Deleted');
-    // Give user brief moment to see the status message, then return to list
-    setTimeout(() => {
-      navigate({ screen: 'list' });
-    }, 500);
+    setTimeout(() => { navigate({ screen: 'list' }); }, 500);
   } catch (err) {
     const msg = `Delete failed: ${err instanceof Error ? err.message : err}`;
     showStatus(msg, true);
@@ -1185,10 +1310,13 @@ function closeAttachmentPanel(): void {
 }
 
 async function openAttachmentPanel(): Promise<void> {
-  if (!currentNote || !state) return;
+  const buf = activeBuffer();
+  if (!buf || !state) return;
 
   const editorScreen = document.querySelector('.editor-screen');
   if (!editorScreen) return;
+
+  const currentNote = buf.note;
 
   // Build repo link for header
   const ar = getAttachmentsRepo();
@@ -1291,7 +1419,8 @@ async function openAttachmentPanel(): Promise<void> {
 }
 
 async function refreshAttachmentList(): Promise<void> {
-  if (!currentNote || !state) return;
+  const buf = activeBuffer();
+  if (!buf || !state) return;
   const listEl = document.getElementById('attachment-list');
   if (!listEl) return;
 
@@ -1303,14 +1432,16 @@ async function refreshAttachmentList(): Promise<void> {
 
   try {
     currentAttachments = await listAttachments(
-      state.host, state.token, ar.owner, ar.repo, currentNote.owner, currentNote.repo, currentNote.number,
+      state.host, state.token, ar.owner, ar.repo, buf.note.owner, buf.note.repo, buf.note.number,
     );
+    buf.attachments = currentAttachments;
   } catch (err) {
     listEl.innerHTML = `<p class="attachment-error">Failed to load: ${err instanceof Error ? err.message : err}</p>`;
     return;
   }
 
   selectedAttachmentIndex = 0;
+  buf.selectedAttachmentIndex = 0;
   renderAttachmentRows(listEl);
 }
 
@@ -1389,7 +1520,11 @@ function moveAttachmentSelection(delta: number): void {
 }
 
 async function uploadFiles(files: File[]): Promise<void> {
-  if (!currentNote || !state || files.length === 0) return;
+  const buf = activeBuffer();
+  if (!buf || !state || files.length === 0) return;
+
+  // Capture note at upload start time so mid-upload buffer switches land on the right note
+  const uploadNote = buf.note;
 
   const ar = await ensureAttachmentRepo();
   if (!ar) return;
@@ -1398,7 +1533,7 @@ async function uploadFiles(files: File[]): Promise<void> {
   let existingShas: Record<string, string> = {};
   try {
     const fresh = await listAttachments(
-      state!.host, state!.token, ar.owner, ar.repo, currentNote!.owner, currentNote!.repo, currentNote!.number,
+      state!.host, state!.token, ar.owner, ar.repo, uploadNote.owner, uploadNote.repo, uploadNote.number,
     );
     existingShas = Object.fromEntries(fresh.map(a => [a.name, a.sha]));
   } catch { /* ignore — treat as new files */ }
@@ -1422,7 +1557,7 @@ async function uploadFiles(files: File[]): Promise<void> {
 
       const attachment = await uploadAttachment(
         state!.host, state!.token, ar.owner, ar.repo,
-        currentNote!.owner, currentNote!.repo, currentNote!.number,
+        uploadNote.owner, uploadNote.repo, uploadNote.number,
         file.name, base64, existingShas[file.name],
       );
 
@@ -1468,7 +1603,7 @@ async function uploadFiles(files: File[]): Promise<void> {
 }
 
 async function handleAttachmentUpload(): Promise<void> {
-  if (!currentNote || !state) return;
+  if (!activeBuffer() || !state) return;
   const input = document.createElement('input');
   input.type = 'file';
   input.multiple = true;
@@ -1480,7 +1615,7 @@ async function handleAttachmentUpload(): Promise<void> {
 
 async function downloadAttachmentByIndex(idx: number): Promise<void> {
   const a = currentAttachments[idx];
-  if (!a || !currentNote || !state) return;
+  if (!a || !activeBuffer() || !state) return;
   const ar = getAttachmentsRepo();
   if (!ar) return;
   try {
@@ -1506,7 +1641,7 @@ async function downloadSelectedAttachment(): Promise<void> {
 
 async function previewSelectedAttachment(): Promise<void> {
   const a = currentAttachments[selectedAttachmentIndex];
-  if (!a || !currentNote || !state) return;
+  if (!a || !activeBuffer() || !state) return;
   const ar = getAttachmentsRepo();
   if (!ar) return;
   try {
@@ -1543,7 +1678,9 @@ function toggleMultiSelect(): void {
 }
 
 async function deleteSelectedAttachments(): Promise<void> {
-  if (!currentNote || !state) return;
+  const buf = activeBuffer();
+  if (!buf || !state) return;
+  const currentNote = buf.note;
   const ar = getAttachmentsRepo();
   if (!ar) return;
 

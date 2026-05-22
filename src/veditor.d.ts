@@ -2,10 +2,18 @@
 
 export const VERSION: string;
 
+export interface DocEntry {
+  id: string;
+  label: string;
+}
+
 export interface VEditorCallbacks {
   onSave: () => Promise<void>;
   onQuit: () => void;
   isAppDirty?: () => boolean;
+  onListDocuments?: () => Promise<DocEntry[]>;
+  onLoadDocument?: (id: string) => Promise<{ content: string; label: string; callbacks: VEditorCallbacks }>;
+  onBufferSwitch?: (id: string, label: string) => void;
 }
 
 export interface VEditorOptions {
@@ -15,6 +23,8 @@ export interface VEditorOptions {
   normalMappings?: Record<string, () => void>;
   extensions?: unknown[];
   autoSaveMs?: number;
+  initialBufferId?: string;
+  initialBufferLabel?: string;
 }
 
 export function createEditor(
