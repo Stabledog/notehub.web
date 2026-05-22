@@ -12,7 +12,12 @@
     <title>notehub</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div style="font-family:sans-serif;padding:2em;color:#900;max-width:600px">
+        <b>Deployment error</b>: your GitHub source is serving source files instead of the built app.<br><br>
+        Fix: repo <b>Settings &rarr; Pages</b> &rarr; set Branch = <code>gh-pages</code> (not main).
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
