@@ -81,6 +81,10 @@ interface NoteBuffer {
   multiSelectedAttachments: Set<number>;
 }
 
+function createNoteBuffer(note: NoteSearchResult, body: string, title: string, updatedAt: string | null): NoteBuffer {
+  return { note, originalBody: body, originalTitle: title, loadedUpdatedAt: updatedAt, attachments: [], selectedAttachmentIndex: 0, multiSelectedAttachments: new Set() };
+}
+
 let state: AppState | null = null;
 let newNoteTarget: { owner: string; repo: string } | null = null;
 let justCreatedNote: NoteSearchResult | null = null;
@@ -934,7 +938,7 @@ async function openNote(owner: string, repo: string, number: number): Promise<vo
   if (noteBuffers.has(key)) {
     activeNoteKey = key;
     const buf = noteBuffers.get(key)!;
-    if (currentScreen === 'edit' && document.querySelector('.editor-screen')) {
+    if (document.querySelector('.editor-screen')) {
       onBufferActivated(key, buf);
     } else {
       renderEditor(buf.note.title, buf.originalBody, buf);
@@ -949,15 +953,7 @@ async function openNote(owner: string, repo: string, number: number): Promise<vo
     const note = await getNote(state.host, state.token, owner, repo, number);
     logInfo(`Note: Loaded note #${number}: "${note.title}"`);
     const noteResult = { ...note, owner, repo };
-    const buf: NoteBuffer = {
-      note: noteResult,
-      originalBody: note.body ?? '',
-      originalTitle: note.title,
-      loadedUpdatedAt: note.updated_at,
-      attachments: [],
-      selectedAttachmentIndex: 0,
-      multiSelectedAttachments: new Set(),
-    };
+    const buf = createNoteBuffer(noteResult, note.body ?? '', note.title, note.updated_at);
     noteBuffers.set(key, buf);
     activeNoteKey = key;
     renderEditor(note.title, buf.originalBody, buf);
@@ -970,6 +966,7 @@ async function openNote(owner: string, repo: string, number: number): Promise<vo
 
 /** Update header chrome and URL when a buffer becomes active (without re-rendering the editor). */
 function onBufferActivated(key: string, buf: NoteBuffer): void {
+  if (activeNoteKey === key) return;
   activeNoteKey = key;
   currentEditKey = key;
   const note = buf.note;
@@ -978,9 +975,7 @@ function onBufferActivated(key: string, buf: NoteBuffer): void {
   titleHandle?.setValue(note.title);
 
   const numEl = document.getElementById('note-number');
-  if (numEl) {
-    numEl.innerHTML = `<a href="${escapeAttr(issueUrl(state!.host, note.owner, note.repo, note.number))}" target="${hashTarget(issueUrl(state!.host, note.owner, note.repo, note.number))}" class="issue-link">#${note.number}</a>`;
-  }
+  if (numEl) numEl.innerHTML = noteNumberHtml(state!.host, note.owner, note.repo, note.number);
 
   // Sync attachment panel state to incoming buffer
   currentAttachments = buf.attachments;
@@ -1012,24 +1007,14 @@ function makeSaveCallback(getBuf: () => NoteBuffer | null): () => Promise<void> 
         newNoteTarget = null;
 
         const key = `${noteResult.owner}/${noteResult.repo}/${noteResult.number}`;
-        const newBuf: NoteBuffer = {
-          note: noteResult,
-          originalBody: created.body ?? '',
-          originalTitle: created.title,
-          loadedUpdatedAt: created.updated_at,
-          attachments: [],
-          selectedAttachmentIndex: 0,
-          multiSelectedAttachments: new Set(),
-        };
+        const newBuf = createNoteBuffer(noteResult, created.body ?? '', created.title, created.updated_at);
         noteBuffers.set(key, newBuf);
         activeNoteKey = key;
         currentEditKey = key;
         replaceRoute({ screen: 'edit', owner: noteResult.owner, repo: noteResult.repo, number: noteResult.number });
 
         const numEl = document.getElementById('note-number');
-        if (numEl) {
-          numEl.innerHTML = `<a href="${escapeAttr(issueUrl(state.host, noteResult.owner, noteResult.repo, noteResult.number))}" target="${hashTarget(issueUrl(state.host, noteResult.owner, noteResult.repo, noteResult.number))}" class="issue-link">#${noteResult.number}</a>`;
-        }
+        if (numEl) numEl.innerHTML = noteNumberHtml(state.host, noteResult.owner, noteResult.repo, noteResult.number);
         showStatus('Created');
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1073,48 +1058,37 @@ function makeSaveCallback(getBuf: () => NoteBuffer | null): () => Promise<void> 
   };
 }
 
-function makeLoadDocumentCallback(): (id: string) => Promise<{ content: string; label: string; callbacks: import('./veditor').VEditorCallbacks }> {
-  return async (id: string) => {
-    if (!state) throw new Error('Not authenticated');
+async function loadDocument(id: string): Promise<{ content: string; label: string; callbacks: import('./veditor').VEditorCallbacks }> {
+  if (!state) throw new Error('Not authenticated');
 
-    // Check if we already have a buffer for this note
-    if (noteBuffers.has(id)) {
-      const buf = noteBuffers.get(id)!;
-      return {
-        content: buf.originalBody,
-        label: buf.note.title,
-        callbacks: makeBufferCallbacks(() => noteBuffers.get(id) ?? null, id),
-      };
-    }
-
-    const parts = id.split('/');
-    if (parts.length !== 3) throw new Error(`Invalid document id: ${id}`);
-    const [owner, repo, numStr] = parts;
-    const number = parseInt(numStr, 10);
-
-    logInfo(`Note: Loading document ${id} for new buffer`);
-    const note = await getNote(state.host, state.token, owner, repo, number);
-    const noteResult = { ...note, owner, repo };
-    const buf: NoteBuffer = {
-      note: noteResult,
-      originalBody: note.body ?? '',
-      originalTitle: note.title,
-      loadedUpdatedAt: note.updated_at,
-      attachments: [],
-      selectedAttachmentIndex: 0,
-      multiSelectedAttachments: new Set(),
-    };
-    noteBuffers.set(id, buf);
-
+  if (noteBuffers.has(id)) {
+    const buf = noteBuffers.get(id)!;
     return {
       content: buf.originalBody,
-      label: note.title,
-      callbacks: makeBufferCallbacks(() => noteBuffers.get(id) ?? null, id),
+      label: buf.note.title,
+      callbacks: makeBufferCallbacks(() => noteBuffers.get(id) ?? null),
     };
+  }
+
+  const parts = id.split('/');
+  if (parts.length !== 3) throw new Error(`Invalid document id: ${id}`);
+  const [owner, repo, numStr] = parts;
+  const number = parseInt(numStr, 10);
+
+  logInfo(`Note: Loading document ${id} for new buffer`);
+  const note = await getNote(state.host, state.token, owner, repo, number);
+  const noteResult = { ...note, owner, repo };
+  const buf = createNoteBuffer(noteResult, note.body ?? '', note.title, note.updated_at);
+  noteBuffers.set(id, buf);
+
+  return {
+    content: buf.originalBody,
+    label: note.title,
+    callbacks: makeBufferCallbacks(() => noteBuffers.get(id) ?? null),
   };
 }
 
-function makeBufferCallbacks(getBuf: () => NoteBuffer | null, _id: string): import('./veditor').VEditorCallbacks {
+function makeBufferCallbacks(getBuf: () => NoteBuffer | null): import('./veditor').VEditorCallbacks {
   return {
     onSave: makeSaveCallback(getBuf),
     onQuit: () => {
@@ -1132,7 +1106,7 @@ function makeBufferCallbacks(getBuf: () => NoteBuffer | null, _id: string): impo
     },
     onListDocuments: async () =>
       lastFetchedNotesList.map(n => ({ id: `${n.owner}/${n.repo}/${n.number}`, label: n.title })),
-    onLoadDocument: makeLoadDocumentCallback(),
+    onLoadDocument: loadDocument,
   };
 }
 
@@ -1147,7 +1121,7 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
       <header>
         <button id="back-to-list" title="Back to notes">&larr;</button>
         <div id="note-title-container"></div>
-        <span id="note-number">${note ? `<a href="${escapeAttr(issueUrl(state!.host, note.owner, note.repo, note.number))}" target="${hashTarget(issueUrl(state!.host, note.owner, note.repo, note.number))}" class="issue-link">#${note.number}</a>` : 'Title'}</span>
+        <span id="note-number">${note ? noteNumberHtml(state!.host, note.owner, note.repo, note.number) : 'Title'}</span>
         ${note ? `<button id="copy-note-url" class="copy-url-btn" title="Copy URL">${clipboardIcon}</button>` : ''}
         ${note ? `<button id="attachment-toggle-btn" class="attachment-toggle-btn" title="Attachments (ga)">${paperclipIcon}</button>` : ''}
         ${note ? `<button id="delete-note-btn" class="delete-note-btn" title="Delete note">${xIcon}</button>` : ''}
@@ -1186,18 +1160,14 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
     },
   );
 
-  // Snapshot the key at render time so the closure stays bound to this buffer
-  const initialKey = activeNoteKey;
-
   const initialCallbacks = makeBufferCallbacks(
     () => activeNoteKey ? (noteBuffers.get(activeNoteKey) ?? null) : null,
-    initialKey ?? '__new__',
   );
 
   veditor.createEditor(document.getElementById('editor-container')!, body, initialCallbacks, {
     storagePrefix: 'notehub',
     autoSaveMs: veditor.getAutoSaveMs(),
-    initialBufferId: initialKey ?? undefined,
+    initialBufferId: activeNoteKey ?? undefined,
     initialBufferLabel: title,
     normalMappings: {
       'gt': () => titleHandle!.focus(),
@@ -1212,7 +1182,7 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
       listAttachments(state!.host, state!.token, ar.owner, ar.repo, note.owner, note.repo, note.number)
         .then(attachments => {
           if (attachments.length > 0 && document.querySelector('.editor-screen')) {
-            openAttachmentPanel();
+            openAttachmentPanel(attachments);
           }
         })
         .catch(() => {});
@@ -1309,7 +1279,7 @@ function closeAttachmentPanel(): void {
   veditor?.focusEditor();
 }
 
-async function openAttachmentPanel(): Promise<void> {
+async function openAttachmentPanel(prefetchedAttachments?: Attachment[]): Promise<void> {
   const buf = activeBuffer();
   if (!buf || !state) return;
 
@@ -1415,29 +1385,34 @@ async function openAttachmentPanel(): Promise<void> {
     if (files.length > 0) await uploadFiles(files);
   });
 
-  await refreshAttachmentList();
+  await refreshAttachmentList(prefetchedAttachments);
 }
 
-async function refreshAttachmentList(): Promise<void> {
+async function refreshAttachmentList(prefetched?: Attachment[]): Promise<void> {
   const buf = activeBuffer();
   if (!buf || !state) return;
   const listEl = document.getElementById('attachment-list');
   if (!listEl) return;
 
-  const ar = await ensureAttachmentRepo();
-  if (!ar) {
-    listEl.innerHTML = '<p class="attachment-error">Attachments repo not available.</p>';
-    return;
-  }
-
-  try {
-    currentAttachments = await listAttachments(
-      state.host, state.token, ar.owner, ar.repo, buf.note.owner, buf.note.repo, buf.note.number,
-    );
+  if (prefetched) {
+    currentAttachments = prefetched;
     buf.attachments = currentAttachments;
-  } catch (err) {
-    listEl.innerHTML = `<p class="attachment-error">Failed to load: ${err instanceof Error ? err.message : err}</p>`;
-    return;
+  } else {
+    const ar = await ensureAttachmentRepo();
+    if (!ar) {
+      listEl.innerHTML = '<p class="attachment-error">Attachments repo not available.</p>';
+      return;
+    }
+
+    try {
+      currentAttachments = await listAttachments(
+        state.host, state.token, ar.owner, ar.repo, buf.note.owner, buf.note.repo, buf.note.number,
+      );
+      buf.attachments = currentAttachments;
+    } catch (err) {
+      listEl.innerHTML = `<p class="attachment-error">Failed to load: ${err instanceof Error ? err.message : err}</p>`;
+      return;
+    }
   }
 
   selectedAttachmentIndex = 0;
@@ -1775,6 +1750,11 @@ function copyText(text: string): Promise<void> {
 
 function issueUrl(host: string, owner: string, repo: string, number: number): string {
   return `https://${host}/${owner}/${repo}/issues/${number}`;
+}
+
+function noteNumberHtml(host: string, owner: string, repo: string, number: number): string {
+  const url = issueUrl(host, owner, repo, number);
+  return `<a href="${escapeAttr(url)}" target="${hashTarget(url)}" class="issue-link">#${number}</a>`;
 }
 
 function notehubUrl(owner: string, repo: string, number: number): string {
