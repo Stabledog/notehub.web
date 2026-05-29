@@ -1200,7 +1200,7 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
       listAttachments(state!.host, state!.token, ar.owner, ar.repo, note.owner, note.repo, note.number)
         .then(attachments => {
           if (attachments.length > 0 && document.querySelector('.editor-screen')) {
-            openAttachmentPanel(attachments);
+            openAttachmentPanel(attachments, { skipFocus: true });
           }
         })
         .catch(() => {});
@@ -1297,7 +1297,7 @@ function closeAttachmentPanel(): void {
   veditor?.focusEditor();
 }
 
-async function openAttachmentPanel(prefetchedAttachments?: Attachment[]): Promise<void> {
+async function openAttachmentPanel(prefetchedAttachments?: Attachment[], opts?: { skipFocus?: boolean }): Promise<void> {
   const buf = activeBuffer();
   if (!buf || !state) return;
 
@@ -1337,7 +1337,7 @@ async function openAttachmentPanel(prefetchedAttachments?: Attachment[]): Promis
   `;
 
   editorScreen.appendChild(panel);
-  panel.focus();
+  if (!opts?.skipFocus) panel.focus();
 
   document.getElementById('attachment-close-btn')!.addEventListener('click', (e) => {
     e.stopPropagation();
