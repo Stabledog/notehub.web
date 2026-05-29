@@ -16,6 +16,11 @@ export interface VEditorCallbacks {
   onBufferSwitch?: (id: string, label: string) => void;
 }
 
+export interface HelpSection {
+  title: string;
+  entries: Array<[key: string, desc: string]>;
+}
+
 export interface VEditorOptions {
   storagePrefix?: string;
   clickableLinks?: boolean;
@@ -25,6 +30,7 @@ export interface VEditorOptions {
   autoSaveMs?: number;
   initialBufferId?: string;
   initialBufferLabel?: string;
+  helpSections?: HelpSection[];
 }
 
 export function createEditor(

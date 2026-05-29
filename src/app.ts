@@ -1173,6 +1173,24 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
       'gt': () => titleHandle!.focus(),
       'ga': () => toggleAttachmentPanel(),
     },
+    helpSections: [
+      {
+        title: 'notehub — Normal mode',
+        entries: [
+          ['gt', 'Focus title input'],
+          ['ga', 'Toggle attachment panel'],
+        ],
+      },
+      {
+        title: 'notehub — Note list (outside editor)',
+        entries: [
+          ['j / k', 'Navigate notes'],
+          ['n', 'New note'],
+          ['r', 'Refresh note list'],
+          ['/', 'Open search bar'],
+        ],
+      },
+    ],
   });
 
   // Auto-open attachment panel if the note already has attachments
