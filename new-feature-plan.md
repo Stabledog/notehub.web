@@ -52,6 +52,60 @@ Match text highlighted with `<mark>`. Shows ~40 chars of surrounding context.
 
 ---
 
+## Feature 1b: Global Search from the Editor
+
+### Problem
+Once a note is open, there is no keyboard path to search across all notes. The `/` key is owned by vim (in-buffer search). The user must `:q` out to the list, invoke `/` there, then re-open the target note.
+
+### UI Flow
+1. Press `gs` in normal mode (vim convention — "go search"; doesn't conflict with vim's `/`)
+2. A modal overlay opens over the editor (command-palette style)
+3. `searchNotes()` is called immediately — a "Loading..." state is shown while it fetches
+4. The user can begin typing before the fetch completes; the search runs as soon as both query and data are ready
+5. Results filter in real time (debounced 150ms) with the same context-snippet logic as the list-screen search
+6. `j`/`k` navigate results, `Enter` opens the selected note (navigates in-place), `Ctrl+Enter` opens in a new tab
+7. `Escape` dismisses the overlay and returns focus to the editor
+8. Regex toggle: `Ctrl+R` or a toggle button (same as list-screen search)
+
+### Design decisions
+- **Foreground fetch, not stale data.** The short delay is acceptable; users invoking global search expect current results.
+- **Plain `<input>`, not `createVimInput`.** The overlay is a mode break from vim; a standard input is more discoverable and avoids insert-mode confusion.
+- **Navigate in-place on Enter.** Calls `navigate({ screen: 'edit', ... })`, which goes through the normal `openNote()` path (multi-buffer aware: switches if already loaded, fetches if not). Auto-save protects content; dirty-state handling for uncommitted title edits is a known limitation accepted for phase 1.
+- **No separate fetch cache.** `lastFetchedNotesList` is used as a fallback only if the overlay is opened before the list screen has been visited; otherwise a fresh `searchNotes()` call is always made.
+
+### Overlay Layout
+```
+┌─────────────────────────────────────────────────────┐
+│  🔍 [search input..............................] [.*] │
+│  ─────────────────────────────────────────────────  │
+│  Loading notes...                                   │
+│  — or, once loaded: —                               │
+│  user/notes   Meeting notes   ...discussed migr...  │
+│  user/notes   Deploy plan     ...the production...  │
+│  ...                                                │
+│  ─────────────────────────────────────────────────  │
+│  j/k Navigate · Enter Open · Ctrl+Enter New tab     │
+│  Ctrl+R Regex · Esc Close                           │
+└─────────────────────────────────────────────────────┘
+```
+
+### Implementation
+
+**`app.ts` changes:**
+- Extract `performSearch()` out of `showNoteList()` to module scope so both contexts can call it
+- New `showGlobalSearch()`: creates overlay, calls `searchNotes()`, wires up input + j/k + Enter + Ctrl+Enter + Escape + Ctrl+R
+- Add `'gs': () => showGlobalSearch()` to `normalMappings` in `renderEditor()`
+- Add entry to `helpSections` in `renderEditor()`
+
+**`style.css` changes:**
+- `.global-search-overlay` — full-viewport backdrop (semi-transparent, `position: fixed`)
+- `.global-search-card` — centered card, max-width ~640px, max-height ~70vh, scrollable results
+- `.global-search-result` — result row (title + repo badge + context snippet); `.selected` variant
+
+**No changes to `github.ts`** — `searchNotes()` already returns bodies.
+
+---
+
 ## Feature 2: File Attachments
 
 ### Approach: GitHub Contents API
@@ -137,8 +191,9 @@ deleteAttachment(host, token, owner, repo, path, sha) → void
 
 | Phase | Status | Scope | Files |
 |-------|--------|-------|-------|
-| **1a** | ✅ Done | Federated Search (core) | `app.ts`, `style.css` |
-| **1b** | 🔄 Next | File Attachments (core) | `github.ts`, `app.ts`, `style.css` |
+| **1a** | ✅ Done | Federated Search on list screen | `app.ts`, `style.css` |
+| **1b** | ✅ Done | File Attachments (core) | `github.ts`, `app.ts`, `style.css` |
+| **1c** | — | Global Search from editor (`gs`) | `app.ts`, `style.css` |
 | **2** | — | Search polish (jump-to-match, history) | `app.ts` |
 | **3** | — | Attachment polish (drag-drop, paste, previews) | `app.ts` |
 
@@ -149,4 +204,7 @@ deleteAttachment(host, token, owner, repo, path, sha) → void
 - Test attachments: open a note, `:files`, upload a small file, verify it appears in the panel and in the repo at `.notehub/attachments/{n}/`
 - Test download: select attachment, press `d`, verify browser downloads the file
 - Test delete: select attachment, press `x`, confirm, verify removed
+- Test editor global search: open a note, press `gs`, verify overlay appears with loading state, type a query, verify results with context, navigate with j/k, Enter to open
+- Test Ctrl+Enter opens in new tab without leaving the current note
+- Test Escape returns focus to editor (vim normal mode)
 - `npx tsc --noEmit` — typecheck passes
