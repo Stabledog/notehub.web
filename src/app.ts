@@ -425,9 +425,8 @@ async function showNoteList(): Promise<void> {
           debounceTimer = setTimeout(() => runSearch(value), 150);
         },
         onEnter: () => {
-          // Move focus from the search input to the list so j/k/Enter work there.
-          // The search bar stays visible; Escape dismisses it.
-          (document.activeElement as HTMLElement)?.blur();
+          container.tabIndex = -1;
+          container.focus();
         },
         storagePrefix: 'notehub',
       },
@@ -443,9 +442,13 @@ async function showNoteList(): Promise<void> {
       if (searchBarHandle) runSearch(searchBarHandle.getValue());
     });
 
-    // Ctrl+R toggles regex while search bar is focused
+    // Tab/Ctrl+R key handling while search bar is focused
     bar.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (e.key === 'r' && e.ctrlKey) {
+      if (e.key === 'Tab' && !e.shiftKey) {
+        e.preventDefault();
+        container.tabIndex = -1;
+        container.focus();
+      } else if (e.key === 'r' && e.ctrlKey) {
         e.preventDefault();
         regexMode = !regexMode;
         updateRegexToggle();
@@ -469,6 +472,7 @@ async function showNoteList(): Promise<void> {
     searchBarHandle = null;
 
     document.getElementById('search-bar')?.remove();
+    container.removeAttribute('tabindex');
 
     // Restore original table
     if (fullTableHtml) {
