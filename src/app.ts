@@ -276,6 +276,61 @@ function showSettings(error?: string): void {
 
 let cleanupListKeys: (() => void) | null = null;
 
+interface SearchMatch {
+  note: NoteSearchResult;
+  index: number;
+  context: string;
+}
+
+function performSearch(query: string, useRegex: boolean, notes: NoteSearchResult[]): SearchMatch[] | null {
+  let matcher: (text: string) => { index: number; length: number } | null;
+
+  if (useRegex) {
+    let re: RegExp;
+    try {
+      re = new RegExp(query, 'gi');
+    } catch {
+      return null; // invalid regex — let caller report the error
+    }
+    matcher = (text: string) => {
+      re.lastIndex = 0;
+      const m = re.exec(text);
+      return m ? { index: m.index, length: m[0].length } : null;
+    };
+  } else {
+    const lower = query.toLowerCase();
+    matcher = (text: string) => {
+      const idx = text.toLowerCase().indexOf(lower);
+      return idx >= 0 ? { index: idx, length: lower.length } : null;
+    };
+  }
+
+  const results: SearchMatch[] = [];
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    const body = n.body ?? '';
+    const titleMatch = matcher(n.title);
+    const bodyMatch = matcher(body);
+    if (!titleMatch && !bodyMatch) continue;
+
+    const match = bodyMatch ?? titleMatch!;
+    const source = bodyMatch ? body : n.title;
+    const contextRadius = 40;
+    const start = Math.max(0, match.index - contextRadius);
+    const end = Math.min(source.length, match.index + match.length + contextRadius);
+
+    const before = escapeHtml(source.slice(start, match.index));
+    const matched = escapeHtml(source.slice(match.index, match.index + match.length));
+    const after = escapeHtml(source.slice(match.index + match.length, end));
+    const prefix = start > 0 ? '...' : '';
+    const suffix = end < source.length ? '...' : '';
+    const context = `${prefix}${before}<mark>${matched}</mark>${after}${suffix}`;
+
+    results.push({ note: n, index: i, context });
+  }
+  return results;
+}
+
 async function showNoteList(): Promise<void> {
   titleHandle?.destroy(); titleHandle = null;
   veditor?.destroyEditor();
@@ -379,12 +434,6 @@ async function showNoteList(): Promise<void> {
   let regexMode = false;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let fullTableHtml = ''; // stashed when search activates
-
-  interface SearchMatch {
-    note: NoteSearchResult;
-    index: number; // index in notesList
-    context: string; // HTML snippet with <mark> highlighting
-  }
 
   function showSearchBar(): void {
     if (searchActive) return;
@@ -499,64 +548,12 @@ async function showNoteList(): Promise<void> {
     }
 
     const matches = performSearch(query, regexMode, notesList);
-    if (countEl) countEl.textContent = `${matches.length} match${matches.length !== 1 ? 'es' : ''}`;
+    if (matches === null) {
+      if (countEl) { countEl.textContent = 'invalid regex'; countEl.classList.add('error'); }
+      return;
+    }
+    if (countEl) { countEl.textContent = `${matches.length} match${matches.length !== 1 ? 'es' : ''}`; countEl.classList.remove('error'); }
     renderSearchResults(matches);
-  }
-
-  function performSearch(query: string, useRegex: boolean, notes: NoteSearchResult[]): SearchMatch[] {
-    let matcher: (text: string) => { index: number; length: number } | null;
-
-    if (useRegex) {
-      let re: RegExp;
-      try {
-        re = new RegExp(query, 'gi');
-      } catch {
-        // Invalid regex — show error indicator
-        const countEl = document.getElementById('search-count');
-        if (countEl) { countEl.textContent = 'invalid regex'; countEl.classList.add('error'); }
-        return [];
-      }
-      const countEl = document.getElementById('search-count');
-      if (countEl) countEl.classList.remove('error');
-
-      matcher = (text: string) => {
-        re.lastIndex = 0;
-        const m = re.exec(text);
-        return m ? { index: m.index, length: m[0].length } : null;
-      };
-    } else {
-      const lower = query.toLowerCase();
-      matcher = (text: string) => {
-        const idx = text.toLowerCase().indexOf(lower);
-        return idx >= 0 ? { index: idx, length: lower.length } : null;
-      };
-    }
-
-    const results: SearchMatch[] = [];
-    for (let i = 0; i < notes.length; i++) {
-      const n = notes[i];
-      const body = n.body ?? '';
-      const titleMatch = matcher(n.title);
-      const bodyMatch = matcher(body);
-      if (!titleMatch && !bodyMatch) continue;
-
-      // Build context snippet from the best match
-      const match = bodyMatch ?? titleMatch!;
-      const source = bodyMatch ? body : n.title;
-      const contextRadius = 40;
-      const start = Math.max(0, match.index - contextRadius);
-      const end = Math.min(source.length, match.index + match.length + contextRadius);
-
-      const before = escapeHtml(source.slice(start, match.index));
-      const matched = escapeHtml(source.slice(match.index, match.index + match.length));
-      const after = escapeHtml(source.slice(match.index + match.length, end));
-      const prefix = start > 0 ? '...' : '';
-      const suffix = end < source.length ? '...' : '';
-      const context = `${prefix}${before}<mark>${matched}</mark>${after}${suffix}`;
-
-      results.push({ note: n, index: i, context });
-    }
-    return results;
   }
 
   function renderSearchResults(matches: SearchMatch[]): void {
@@ -1114,6 +1111,177 @@ function makeBufferCallbacks(getBuf: () => NoteBuffer | null): import('./veditor
   };
 }
 
+function showGlobalSearch(): void {
+  if (document.getElementById('global-search-overlay')) return;
+  if (!state) return;
+
+  let allNotes: NoteSearchResult[] = [];
+  let gsRegexMode = false;
+  let gsSelectedIndex = 0;
+  let gsDebounce: ReturnType<typeof setTimeout> | null = null;
+  let currentMatches: SearchMatch[] = [];
+
+  const overlay = document.createElement('div');
+  overlay.id = 'global-search-overlay';
+  overlay.className = 'global-search-overlay';
+  overlay.innerHTML = `
+    <div class="global-search-card">
+      <div class="global-search-header">
+        <input id="gs-input" class="global-search-input" type="text" placeholder="Search all notes..." autocomplete="off" spellcheck="false" />
+        <button id="gs-regex" class="search-regex-toggle" title="Toggle regex (Ctrl+R)">.*</button>
+        <span id="gs-count" class="search-count"></span>
+      </div>
+      <div id="gs-results" class="global-search-results">
+        <p class="global-search-status">Loading notes...</p>
+      </div>
+      <div class="global-search-footer">
+        <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
+        <span><kbd>Enter</kbd> Open</span>
+        <span><kbd>Ctrl+Enter</kbd> New tab</span>
+        <span><kbd>Ctrl+R</kbd> Regex</span>
+        <span><kbd>Esc</kbd> Close</span>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const input = document.getElementById('gs-input') as HTMLInputElement;
+  const resultsEl = document.getElementById('gs-results')!;
+  const countEl = document.getElementById('gs-count')!;
+  const regexBtn = document.getElementById('gs-regex')!;
+
+  input.focus();
+
+  function dismiss(): void {
+    overlay.remove();
+    veditor?.focusEditor();
+  }
+
+  function updateRegexBtn(): void {
+    regexBtn.classList.toggle('active', gsRegexMode);
+  }
+
+  function updateSelection(): void {
+    resultsEl.querySelectorAll('.global-search-result').forEach((row, i) => {
+      row.classList.toggle('selected', i === gsSelectedIndex);
+    });
+    resultsEl.querySelector('.global-search-result.selected')?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function renderResults(matches: SearchMatch[]): void {
+    currentMatches = matches;
+    gsSelectedIndex = 0;
+    if (matches.length === 0) {
+      resultsEl.innerHTML = '<p class="global-search-status">No matches.</p>';
+      return;
+    }
+    resultsEl.innerHTML = matches.map((m, i) => `
+      <div class="global-search-result${i === 0 ? ' selected' : ''}" data-index="${i}">
+        <span class="global-search-result-title">${escapeHtml(m.note.title)}</span>
+        <span class="global-search-result-repo">${escapeHtml(m.note.repo)}</span>
+        <span class="global-search-result-context search-context">${m.context}</span>
+      </div>
+    `).join('');
+
+    resultsEl.querySelectorAll('.global-search-result').forEach(row => {
+      const idx = parseInt((row as HTMLElement).dataset.index!, 10);
+      row.addEventListener('mousemove', () => {
+        if (gsSelectedIndex !== idx) { gsSelectedIndex = idx; updateSelection(); }
+      });
+      row.addEventListener('click', (e) => {
+        gsSelectedIndex = idx;
+        openSelected((e as MouseEvent).ctrlKey || (e as MouseEvent).metaKey);
+      });
+    });
+  }
+
+  function runSearch(): void {
+    const query = input.value;
+    if (!query.trim()) {
+      countEl.textContent = allNotes.length > 0 ? `${allNotes.length} note${allNotes.length !== 1 ? 's' : ''}` : '';
+      countEl.classList.remove('error');
+      resultsEl.innerHTML = '<p class="global-search-status">Type to search…</p>';
+      currentMatches = [];
+      return;
+    }
+    const matches = performSearch(query, gsRegexMode, allNotes);
+    if (matches === null) {
+      countEl.textContent = 'invalid regex';
+      countEl.classList.add('error');
+      return;
+    }
+    countEl.textContent = `${matches.length} match${matches.length !== 1 ? 'es' : ''}`;
+    countEl.classList.remove('error');
+    renderResults(matches);
+  }
+
+  function openSelected(newTab: boolean): void {
+    const m = currentMatches[gsSelectedIndex];
+    if (!m) return;
+    dismiss();
+    const route = { screen: 'edit' as const, owner: m.note.owner, repo: m.note.repo, number: m.note.number };
+    if (newTab) {
+      window.open(`${location.pathname}${buildHash(route)}`, '_blank');
+    } else {
+      navigate(route);
+    }
+  }
+
+  input.addEventListener('input', () => {
+    if (gsDebounce) clearTimeout(gsDebounce);
+    if (allNotes.length > 0) gsDebounce = setTimeout(runSearch, 150);
+  });
+
+  overlay.addEventListener('keydown', (e: KeyboardEvent) => {
+    const inInput = e.target === input;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      dismiss();
+    } else if (e.key === 'ArrowDown' || (e.key === 'j' && !inInput)) {
+      e.preventDefault();
+      if (currentMatches.length > 0) {
+        gsSelectedIndex = Math.min(gsSelectedIndex + 1, currentMatches.length - 1);
+        updateSelection();
+      }
+    } else if (e.key === 'ArrowUp' || (e.key === 'k' && !inInput)) {
+      e.preventDefault();
+      if (gsSelectedIndex > 0) { gsSelectedIndex--; updateSelection(); }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      openSelected(e.ctrlKey || e.metaKey);
+    } else if (e.key === 'r' && e.ctrlKey) {
+      e.preventDefault();
+      gsRegexMode = !gsRegexMode;
+      updateRegexBtn();
+      if (allNotes.length > 0) runSearch();
+    }
+  });
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) dismiss();
+  });
+
+  regexBtn.addEventListener('click', () => {
+    gsRegexMode = !gsRegexMode;
+    updateRegexBtn();
+    if (allNotes.length > 0) runSearch();
+  });
+
+  searchNotes(state.host, state.token)
+    .then(notes => {
+      allNotes = notes;
+      if (input.value.trim()) {
+        runSearch();
+      } else {
+        countEl.textContent = `${notes.length} note${notes.length !== 1 ? 's' : ''}`;
+        resultsEl.innerHTML = '<p class="global-search-status">Type to search…</p>';
+      }
+    })
+    .catch(err => {
+      resultsEl.innerHTML = `<p class="global-search-status error">Failed to load: ${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`;
+    });
+}
+
 function renderEditor(title: string, body: string, buf: NoteBuffer | null): void {
   cleanupListKeys?.();
   cleanupListKeys = null;
@@ -1176,6 +1344,7 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
     normalMappings: {
       'gt': () => titleHandle!.focus(),
       'ga': () => toggleAttachmentPanel(),
+      'gs': () => showGlobalSearch(),
     },
     helpSections: [
       {
@@ -1183,6 +1352,7 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
         entries: [
           ['gt', 'Focus title input'],
           ['ga', 'Toggle attachment panel'],
+          ['gs', 'Search all notes'],
         ],
       },
       {
