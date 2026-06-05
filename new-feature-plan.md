@@ -193,9 +193,11 @@ deleteAttachment(host, token, owner, repo, path, sha) → void
 |-------|--------|-------|-------|
 | **1a** | ✅ Done | Federated Search on list screen | `app.ts`, `style.css` |
 | **1b** | ✅ Done | File Attachments (core) | `github.ts`, `app.ts`, `style.css` |
-| **1c** | — | Global Search from editor (`gs`) | `app.ts`, `style.css` |
+| **1c** | ✅ Done | Global Search from editor (`gs`) | `app.ts`, `style.css` |
 | **2** | — | Search polish (jump-to-match, history) | `app.ts` |
-| **3** | — | Attachment polish (drag-drop, paste, previews) | `app.ts` |
+| **3** | ⚡ Partial | Attachment polish (drag-drop, paste, previews) | `app.ts` |
+
+**Phase 3 detail:** drag-drop upload onto the panel is done. Paste-to-upload (screenshots), inline image thumbnails in the panel, and large-file support via the Git Blob API are not yet implemented. (Attachment preview via new tab and multi-select delete are also implemented, beyond the original scope.)
 
 ## Verification
 - `VITE_BASE=/ npm run dev` — start dev server
