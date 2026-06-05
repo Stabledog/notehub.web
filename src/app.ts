@@ -1135,7 +1135,8 @@ function showGlobalSearch(): void {
         <p class="global-search-status">Loading notes...</p>
       </div>
       <div class="global-search-footer">
-        <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
+        <span><kbd>Tab</kbd> Results</span>
+        <span><kbd>j</kbd><kbd>k</kbd> Navigate</span>
         <span><kbd>Enter</kbd> Open</span>
         <span><kbd>Ctrl+Enter</kbd> New tab</span>
         <span><kbd>Ctrl+R</kbd> Regex</span>
@@ -1232,11 +1233,19 @@ function showGlobalSearch(): void {
     if (allNotes.length > 0) gsDebounce = setTimeout(runSearch, 150);
   });
 
+  resultsEl.tabIndex = -1;
+
   overlay.addEventListener('keydown', (e: KeyboardEvent) => {
     const inInput = e.target === input;
     if (e.key === 'Escape') {
       e.preventDefault();
       dismiss();
+    } else if (e.key === 'Tab' && !e.shiftKey && inInput) {
+      e.preventDefault();
+      resultsEl.focus();
+    } else if (e.key === 'Tab' && e.shiftKey && e.target === resultsEl) {
+      e.preventDefault();
+      input.focus();
     } else if (e.key === 'ArrowDown' || (e.key === 'j' && !inInput)) {
       e.preventDefault();
       if (currentMatches.length > 0) {
