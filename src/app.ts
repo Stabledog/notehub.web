@@ -935,15 +935,17 @@ async function openNote(owner: string, repo: string, number: number): Promise<vo
   currentEditKey = key;
   replaceRoute({ screen: 'edit', owner, repo, number });
 
-  // If we already have a buffer for this note (e.g. via :ls picker), just switch to it
+  // If we already have a buffer for this note, re-render it.
+  // We must always call renderEditor (not the onBufferActivated shortcut) so that
+  // veditor.createEditor runs, which cancels any pending auto-save timer from the
+  // previous note and resets veditor's buffer manager.  Skipping createEditor leaves
+  // veditor pointing at the old buffer; if its auto-save then fires it reads the old
+  // content but resolves the save target via activeNoteKey (now pointing here),
+  // overwriting this note with the previous one's content.
   if (noteBuffers.has(key)) {
     activeNoteKey = key;
     const buf = noteBuffers.get(key)!;
-    if (document.querySelector('.editor-screen')) {
-      onBufferActivated(key, buf);
-    } else {
-      renderEditor(buf.note.title, buf.originalBody, buf);
-    }
+    renderEditor(buf.note.title, buf.originalBody, buf);
     return;
   }
 
