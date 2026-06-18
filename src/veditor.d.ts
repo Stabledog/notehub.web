@@ -40,6 +40,7 @@ export function createEditor(
   options?: VEditorOptions,
 ): unknown;
 
+export function insertAtCursor(text: string): void;
 export function getEditorContent(): string;
 export function isEditorDirty(original: string): boolean;
 export function focusEditor(): void;

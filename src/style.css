@@ -619,6 +619,12 @@ thead th {
   align-items: center;
 }
 
+.screen-capture-btn {
+  padding: 0.25rem 0.4rem;
+  display: flex;
+  align-items: center;
+}
+
 .attachment-panel {
   display: flex;
   flex-direction: column;

@@ -1307,6 +1307,7 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
         <span id="note-number">${note ? noteNumberHtml(state!.host, note.owner, note.repo, note.number) : 'Title'}</span>
         ${note ? `<button id="copy-note-url" class="copy-url-btn" title="Copy URL">${clipboardIcon}</button>` : ''}
         ${note ? `<button id="attachment-toggle-btn" class="attachment-toggle-btn" title="Attachments (ga)">${paperclipIcon}</button>` : ''}
+        ${note ? `<button id="screen-capture-btn" class="screen-capture-btn" title="Screen capture (gS)">${cameraIcon}</button>` : ''}
         ${note ? `<button id="delete-note-btn" class="delete-note-btn" title="Delete note">${xIcon}</button>` : ''}
         <span id="status-msg"></span>
       </header>
@@ -1331,6 +1332,7 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
   }
 
   document.getElementById('attachment-toggle-btn')?.addEventListener('click', () => toggleAttachmentPanel());
+  document.getElementById('screen-capture-btn')?.addEventListener('click', () => handleScreenCapture());
   document.getElementById('delete-note-btn')?.addEventListener('click', () => handleDelete());
 
   titleHandle = veditor.createVimInput(
@@ -1355,6 +1357,7 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
     normalMappings: {
       'gt': () => titleHandle!.focus(),
       'ga': () => toggleAttachmentPanel(),
+      'gS': () => handleScreenCapture(),
       'gs': () => showGlobalSearch(),
     },
     helpSections: [
@@ -1363,6 +1366,7 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
         entries: [
           ['gt', 'Focus title input'],
           ['ga', 'Toggle attachment panel'],
+          ['gS', 'Screen capture'],
           ['gs', 'Search all notes'],
         ],
       },
@@ -1376,6 +1380,24 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
         ],
       },
     ],
+  });
+
+  // Intercept image pastes: upload to attachments repo and insert markdown ref
+  document.getElementById('editor-container')!.addEventListener('paste', (e: ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const blob = item.getAsFile();
+        if (!blob) return;
+        const ext = item.type.split('/')[1] || 'png';
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const file = new File([blob], `screenshot-${ts}.${ext}`, { type: item.type });
+        uploadAndInsertImage(file).catch(err => showStatus(`Screenshot upload failed: ${err instanceof Error ? err.message : err}`, true));
+        return;
+      }
+    }
   });
 
   // Auto-open attachment panel if the note already has attachments
@@ -1697,6 +1719,62 @@ function moveAttachmentSelection(delta: number): void {
   if (listEl) renderAttachmentRows(listEl);
 }
 
+async function uploadAndInsertImage(file: File): Promise<void> {
+  const buf = activeBuffer();
+  if (!buf || !state) return;
+  const note = buf.note;
+
+  const ar = await ensureAttachmentRepo();
+  if (!ar) return;
+
+  showStatus('Uploading screenshot...');
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  const CHUNK = 8192;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  const base64 = btoa(binary);
+
+  const attachment = await uploadAttachment(
+    state.host, state.token, ar.owner, ar.repo,
+    note.owner, note.repo, note.number,
+    file.name, base64,
+  );
+
+  veditor.insertAtCursor(`\n![screenshot](${attachment.download_url})\n`);
+  showStatus('Screenshot inserted');
+}
+
+async function handleScreenCapture(): Promise<void> {
+  if (!activeBuffer()?.note || !state) return;
+  let stream: MediaStream | null = null;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    const track = stream.getVideoTracks()[0];
+    const video = document.createElement('video');
+    video.srcObject = stream;
+    await video.play();
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d')!.drawImage(video, 0, 0);
+    track.stop();
+    canvas.toBlob(async blob => {
+      if (!blob) { showStatus('Screen capture failed', true); return; }
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const file = new File([blob], `screenshot-${ts}.png`, { type: 'image/png' });
+      await uploadAndInsertImage(file).catch(err => showStatus(`Screenshot upload failed: ${err instanceof Error ? err.message : err}`, true));
+    }, 'image/png');
+  } catch (err) {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (err instanceof Error && err.name !== 'NotAllowedError') {
+      showStatus(`Screen capture failed: ${err.message}`, true);
+    }
+  }
+}
+
 async function uploadFiles(files: File[]): Promise<void> {
   const buf = activeBuffer();
   if (!buf || !state || files.length === 0) return;
@@ -1931,6 +2009,7 @@ const paperclipIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="non
 const checkIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 const xIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 const externalIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+const cameraIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>';
 
 function copyText(text: string): Promise<void> {
   if (inBarouse) {
