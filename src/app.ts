@@ -1743,7 +1743,8 @@ async function uploadAndInsertImage(file: File): Promise<void> {
     file.name, base64,
   );
 
-  veditor.insertAtCursor(`\n![screenshot](${attachment.download_url})\n`);
+  const rawUrl = `https://${state.host}/${ar.owner}/${ar.repo}/raw/main/${attachment.path}`;
+  veditor.insertAtCursor(`\n![screenshot](${rawUrl})\n`);
   showStatus('Screenshot inserted');
 }
 
@@ -1819,7 +1820,8 @@ async function uploadFiles(files: File[]): Promise<void> {
 
       logInfo(`Attachment: Uploaded ${file.name} (${file.size} bytes)`);
 
-      uploadedLinks.push(`[${file.name}](${attachment.download_url})`);
+      const rawUrl = `https://${state!.host}/${ar.owner}/${ar.repo}/raw/main/${attachment.path}`;
+      uploadedLinks.push(`[${file.name}](${rawUrl})`);
 
       const existingIdx = currentAttachments.findIndex(a => a.name === file.name);
       if (existingIdx >= 0) {
