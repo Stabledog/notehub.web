@@ -43,6 +43,17 @@ The editor (CodeMirror 6 + vim mode) is provided by **veditor.web** (`Stabledog/
 - **Vim ex commands as app actions** — `:w` triggers a PATCH to save, `:q` navigates back to the list, `:wq` saves then navigates. These are registered by veditor.web via the `onSave`/`onQuit` callbacks. The `gt` normal-mode mapping (focus title input) is passed via `normalMappings` in `VEditorOptions`.
 - **All API functions take `host` as the first parameter** — this threads through from `AppState.host` in `app.ts`.
 
+## Attachments
+
+Attachments are stored in a **separate sibling repo**, `{defaultRepo}.attachments` (see `getAttachmentsRepoInfo` in `github.ts`), never in the note repo itself. Files are laid out per note at `{noteOwner}/{noteRepo}/{issueNumber}/{filename}`.
+
+**Privacy model — private by design.** Keep the `.attachments` repo private. Attachment privacy rests entirely on this convention; there is no other enforcement. Do **not** enable GitHub Pages on the `.attachments` repo, and do not make it public — either would expose every attachment.
+
+Two distinct access paths, both backed by that private repo:
+
+- **Previews & downloads (PDFs, etc.)** — `fetchAttachmentBlob` (`github.ts`) fetches raw bytes through the REST contents API (`Accept: application/vnd.github.raw`) authenticated with the **stored PAT**, then wraps them in an in-memory `Blob` and opens a `URL.createObjectURL(...)` `blob:` URL. This is robustly private: access is gated by the PAT and works only through the app. The `blob:https://<app-origin>/<uuid>` URL is a browser-local, in-memory handle (auto-revoked after 60s) — it is *not* a server resource, so stripping the `blob:` prefix always 404s.
+- **Pasted/inline images** — `uploadAndInsertImage` embeds a durable `https://{host}/{owner}/{repo}/raw/main/{path}` link into the note markdown. This URL relies on the **browser's GitHub session cookie**, not the PAT. It renders inline for a logged-in owner but is *not* a public or shareable link — anyone without repo access (or without a GitHub session) gets 403/404.
+
 ## Git & Remote
 
 - Main branch: `main`
