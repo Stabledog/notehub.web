@@ -1606,12 +1606,32 @@ async function openAttachmentPanel(prefetchedAttachments?: Attachment[], opts?: 
     } else if (e.key === ' ') {
       e.preventDefault();
       toggleMultiSelect();
-    } else if (e.key === 'v') {
+    } else if (e.key === 'v' && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       toggleAttachmentView();
     } else if (e.key === 'x') {
       e.preventDefault();
       await deleteSelectedAttachments();
+    }
+  });
+
+  // Paste an image (e.g. a Win+Shift+S screenshot) directly into the panel to
+  // upload it as an attachment. Reads from the paste event's own clipboardData,
+  // so it needs no clipboard permission and is unaffected by cross-origin rules.
+  panel.addEventListener('paste', (e: ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const blob = item.getAsFile();
+        if (!blob) return;
+        const ext = item.type.split('/')[1] || 'png';
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const file = new File([blob], `pasted-${ts}.${ext}`, { type: item.type });
+        void uploadFiles([file]);
+        return;
+      }
     }
   });
 
@@ -1949,6 +1969,7 @@ async function uploadFiles(files: File[]): Promise<void> {
 
   const uploadedLinks: string[] = [];
   const failed: string[] = [];
+  const failReasons: string[] = [];
 
   for (const file of files) {
     try {
@@ -1985,6 +2006,7 @@ async function uploadFiles(files: File[]): Promise<void> {
       const msg = err instanceof Error ? err.message : String(err);
       logError(`Attachment: Upload failed for ${file.name}: ${msg}`);
       failed.push(file.name);
+      failReasons.push(`${file.name}: ${msg}`);
     }
   }
 
@@ -2006,7 +2028,7 @@ async function uploadFiles(files: File[]): Promise<void> {
           : `Uploaded ${uploadedLinks.length} files`);
     showStatus(failed.length > 0 ? `${base} (${failed.length} failed)` : base, failed.length > 0);
   } else {
-    showStatus(`Upload failed: ${failed.join(', ')}`, true);
+    showStatus(`Upload failed: ${failReasons.join('; ')}`, true);
   }
 
   document.getElementById('attachment-panel')?.focus();
@@ -2046,7 +2068,13 @@ async function downloadAttachmentByIndex(idx: number): Promise<void> {
 }
 
 async function downloadSelectedAttachment(): Promise<void> {
-  await downloadAttachmentByIndex(selectedAttachmentIndex);
+  // Honor multi-select (like delete): download all checked items, else the cursor item.
+  const indices = multiSelectedAttachments.size > 0
+    ? [...multiSelectedAttachments].sort((a, b) => a - b)
+    : [selectedAttachmentIndex];
+  for (const idx of indices) {
+    await downloadAttachmentByIndex(idx);
+  }
 }
 
 async function previewSelectedAttachment(): Promise<void> {
