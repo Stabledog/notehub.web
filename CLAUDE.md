@@ -54,6 +54,15 @@ Two distinct access paths, both backed by that private repo:
 - **Previews & downloads (PDFs, etc.)** — `fetchAttachmentBlob` (`github.ts`) fetches raw bytes through the REST contents API (`Accept: application/vnd.github.raw`) authenticated with the **stored PAT**, then wraps them in an in-memory `Blob` and opens a `URL.createObjectURL(...)` `blob:` URL. This is robustly private: access is gated by the PAT and works only through the app. The `blob:https://<app-origin>/<uuid>` URL is a browser-local, in-memory handle (auto-revoked after 60s) — it is *not* a server resource, so stripping the `blob:` prefix always 404s.
 - **Pasted/inline images** — `uploadAndInsertImage` embeds a durable `https://{host}/{owner}/{repo}/raw/main/{path}` link into the note markdown. This URL relies on the **browser's GitHub session cookie**, not the PAT. It renders inline for a logged-in owner but is *not* a public or shareable link — anyone without repo access (or without a GitHub session) gets 403/404.
 
+### Attachment panel (editor)
+
+Opened with `ga` (or the paperclip button). Two views, toggled with `v` and persisted in `localStorage`:
+
+- **List** — filename + size rows.
+- **Grid** — image thumbnails (non-images show a file-type tile); the panel grows taller in this mode. Thumbnail bytes come from the same PAT-authenticated contents API and are cached in IndexedDB keyed by the file's git blob SHA (`thumb-cache.ts`), so they paint instantly on later opens and a re-upload (new SHA) invalidates automatically. Session `blob:` object URLs are revoked on close.
+
+Selection state (`selectedAttachmentIndex`, `multiSelectedAttachments`) is shared by both views: navigate with `j`/`k`, multi-select with `Space` or the checkbox. Actions apply to the multi-selection when present, else the cursor item — `Enter` download, `p` preview, `x` delete. Upload via `a` (file picker), drag-and-drop, or pasting (`Ctrl+V`) an image into the panel. A full rebuild (`renderAttachmentList`) only happens when the file set changes; navigation just toggles classes (`updateAttachmentSelection`) so grid `<img>` tiles are never torn down and refetched per keystroke.
+
 ## Git & Remote
 
 - Main branch: `main`

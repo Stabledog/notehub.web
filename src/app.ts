@@ -1,6 +1,7 @@
 import { validateToken, repoExists, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentBlob, fetchAttachmentCounts, getAttachmentsRepoInfo, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
 import { logError, logWarn, logInfo, createLogViewer } from './logging-client';
 import { parseHash, buildHash, navigate, replaceRoute, startRouter, type Route } from './router';
+import { getThumb, putThumb } from './thumb-cache';
 
 
 const LS_TOKEN = 'notehub:token';
@@ -14,6 +15,7 @@ let veditor: typeof import('./veditor');
 const LS_HOST = 'notehub:host';
 const LS_DEFAULT_REPO = 'notehub:defaultRepo';
 const LS_PINNED_ISSUE = 'notehub:pinnedIssue';
+const LS_ATTACH_VIEW = 'notehub:attachView';
 
 interface AppState {
   host: string;
@@ -103,6 +105,14 @@ function activeBuffer(): NoteBuffer | null {
 let currentAttachments: Attachment[] = [];
 let selectedAttachmentIndex = 0;
 let multiSelectedAttachments = new Set<number>();
+
+// Attachment view mode ('list' | 'grid'), persisted across sessions.
+let attachmentViewMode: 'list' | 'grid' =
+  localStorage.getItem(LS_ATTACH_VIEW) === 'grid' ? 'grid' : 'list';
+// Session object URLs for grid thumbnails, keyed by sha; revoked on close.
+const thumbObjectUrls = new Map<string, string>();
+// Bumped whenever the grid is rebuilt/closed so in-flight loads can bail out.
+let thumbLoadGeneration = 0;
 
 let inBarouse = false;
 
@@ -1501,6 +1511,9 @@ function closeAttachmentPanel(): void {
   currentAttachments = [];
   selectedAttachmentIndex = 0;
   multiSelectedAttachments.clear();
+  thumbLoadGeneration++;
+  for (const url of thumbObjectUrls.values()) URL.revokeObjectURL(url);
+  thumbObjectUrls.clear();
   veditor?.focusEditor();
 }
 
@@ -1521,7 +1534,7 @@ async function openAttachmentPanel(prefetchedAttachments?: Attachment[], opts?: 
 
   const panel = document.createElement('div');
   panel.id = 'attachment-panel';
-  panel.className = 'attachment-panel';
+  panel.className = 'attachment-panel' + (attachmentViewMode === 'grid' ? ' attachment-panel-grid' : '');
   panel.tabIndex = 0;
   panel.innerHTML = `
     <div class="attachment-panel-header">
@@ -1535,6 +1548,7 @@ async function openAttachmentPanel(prefetchedAttachments?: Attachment[], opts?: 
     <div class="attachment-panel-footer">
       <span class="footer-action" data-action="navigate"><kbd>j</kbd><kbd>k</kbd> Nav</span>
       <span class="footer-action" data-action="select"><kbd>Space</kbd> Select</span>
+      <span class="footer-action" data-action="view"><kbd>v</kbd> <span id="attach-view-label">Grid</span></span>
       <span class="footer-action" data-action="upload"><kbd>a</kbd> Upload</span>
       <span class="footer-action" data-action="download"><kbd>Enter</kbd> Download</span>
       <span class="footer-action" data-action="preview"><kbd>p</kbd> Preview</span>
@@ -1544,6 +1558,7 @@ async function openAttachmentPanel(prefetchedAttachments?: Attachment[], opts?: 
   `;
 
   editorScreen.appendChild(panel);
+  updateViewToggleChip();
   if (!opts?.skipFocus) panel.focus();
 
   document.getElementById('attachment-close-btn')!.addEventListener('click', (e) => {
@@ -1559,6 +1574,7 @@ async function openAttachmentPanel(prefetchedAttachments?: Attachment[], opts?: 
     el.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (action === 'select') toggleMultiSelect();
+      else if (action === 'view') toggleAttachmentView();
       else if (action === 'upload') await handleAttachmentUpload();
       else if (action === 'download') await downloadSelectedAttachment();
       else if (action === 'preview') await previewSelectedAttachment();
@@ -1590,6 +1606,9 @@ async function openAttachmentPanel(prefetchedAttachments?: Attachment[], opts?: 
     } else if (e.key === ' ') {
       e.preventDefault();
       toggleMultiSelect();
+    } else if (e.key === 'v') {
+      e.preventDefault();
+      toggleAttachmentView();
     } else if (e.key === 'x') {
       e.preventDefault();
       await deleteSelectedAttachments();
@@ -1642,81 +1661,214 @@ async function refreshAttachmentList(prefetched?: Attachment[]): Promise<void> {
 
   selectedAttachmentIndex = 0;
   buf.selectedAttachmentIndex = 0;
-  renderAttachmentRows(listEl);
+  renderAttachmentList(listEl);
 }
 
-function renderAttachmentRows(listEl: HTMLElement): void {
+const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'avif']);
+
+function isImageAttachment(name: string): boolean {
+  return IMAGE_EXTS.has(name.split('.').pop()?.toLowerCase() ?? '');
+}
+
+// Full (re)build of the attachment area for the current view mode. Attaches
+// event handlers exactly once per build; selection changes afterward go through
+// the lightweight updateAttachmentSelection() (class toggles only), so we never
+// tear down and rebuild rows/tiles \u2014 and their <img> elements \u2014 on every j/k.
+function renderAttachmentList(listEl: HTMLElement): void {
   if (currentAttachments.length === 0) {
+    listEl.className = 'attachment-list';
     listEl.innerHTML = '<p class="attachment-empty">No attachments yet. Press <kbd>a</kbd> to upload.</p>';
     return;
   }
+  if (attachmentViewMode === 'grid') renderAttachmentGrid(listEl);
+  else renderAttachmentRows(listEl);
+}
 
+function renderAttachmentRows(listEl: HTMLElement): void {
+  listEl.className = 'attachment-list';
   listEl.innerHTML = currentAttachments.map((a, i) => {
-    const isCursor = i === selectedAttachmentIndex;
-    const isMulti = multiSelectedAttachments.has(i);
-    const classes = ['attachment-row', isCursor ? 'selected' : '', isMulti ? 'multi-selected' : ''].filter(Boolean).join(' ');
+    const classes = ['attachment-row', i === selectedAttachmentIndex ? 'selected' : '', multiSelectedAttachments.has(i) ? 'multi-selected' : ''].filter(Boolean).join(' ');
     return `
     <div class="${classes}" data-index="${i}">
-      <span class="attachment-checkbox">${isMulti ? '\u2611' : '\u2610'}</span>
+      <span class="attachment-checkbox">${multiSelectedAttachments.has(i) ? '\u2611' : '\u2610'}</span>
       <span class="attachment-name" title="Click to preview, Ctrl+click to download">${escapeHtml(a.name)}</span>
       <span class="attachment-size">${formatAttachmentSize(a.size)}</span>
     </div>`;
   }).join('');
+  attachSelectionHandlers(listEl);
+  updateAttachmentSelection(listEl);
+}
 
-  // Track whether panel had focus before mousedown (click changes focus)
+function renderAttachmentGrid(listEl: HTMLElement): void {
+  listEl.className = 'attachment-list attachment-grid';
+  listEl.innerHTML = currentAttachments.map((a, i) => {
+    const classes = ['attachment-tile', i === selectedAttachmentIndex ? 'selected' : '', multiSelectedAttachments.has(i) ? 'multi-selected' : ''].filter(Boolean).join(' ');
+    const ext = (a.name.split('.').pop() ?? '').toUpperCase();
+    const thumb = isImageAttachment(a.name)
+      ? `<div class="attachment-thumb" title="Click to preview, Ctrl+click to download"><span class="attachment-thumb-spinner">\u2026</span></div>`
+      : `<div class="attachment-thumb attachment-thumb-file" title="Click to preview, Ctrl+click to download"><span class="attachment-file-ext">${escapeHtml(ext || 'FILE')}</span></div>`;
+    return `
+    <div class="${classes}" data-index="${i}">
+      <span class="attachment-checkbox">${multiSelectedAttachments.has(i) ? '\u2611' : '\u2610'}</span>
+      ${thumb}
+      <span class="attachment-name attachment-tile-caption" title="${escapeAttr(a.name)}">${escapeHtml(a.name)}</span>
+    </div>`;
+  }).join('');
+  attachSelectionHandlers(listEl);
+  updateAttachmentSelection(listEl);
+  loadGridThumbnails(listEl);
+}
+
+// Wire click handlers once per full build. Works for both rows and tiles via
+// the shared [data-index] / .attachment-checkbox / .attachment-name contract;
+// the thumbnail area also triggers preview/download.
+function attachSelectionHandlers(listEl: HTMLElement): void {
+  // Track whether the panel had focus before this mousedown (a click steals it).
   let panelHadFocus = false;
   const panel = document.getElementById('attachment-panel');
   listEl.addEventListener('mousedown', () => {
     panelHadFocus = panel === document.activeElement;
   });
 
-  listEl.querySelectorAll('.attachment-row').forEach(row => {
-    const idx = parseInt((row as HTMLElement).dataset.index!, 10);
+  listEl.querySelectorAll<HTMLElement>('[data-index]').forEach(item => {
+    const idx = parseInt(item.dataset.index!, 10);
 
-    // Click on checkbox toggles multi-select (only if panel already focused)
-    row.querySelector('.attachment-checkbox')?.addEventListener('click', (e) => {
+    item.querySelector('.attachment-checkbox')?.addEventListener('click', (e) => {
       e.stopPropagation();
       if (!panelHadFocus) { panel?.focus(); return; }
       selectedAttachmentIndex = idx;
       if (multiSelectedAttachments.has(idx)) multiSelectedAttachments.delete(idx);
       else multiSelectedAttachments.add(idx);
-      renderAttachmentRows(listEl);
+      updateAttachmentSelection(listEl);
       panel?.focus();
     });
 
-    // Click on name: Ctrl+click downloads, plain click previews (only if panel focused)
-    row.querySelector('.attachment-name')?.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (!panelHadFocus) { panel?.focus(); return; }
-      selectedAttachmentIndex = idx;
-      renderAttachmentRows(listEl);
-      if ((e as MouseEvent).ctrlKey || (e as MouseEvent).metaKey) {
-        await downloadAttachmentByIndex(idx);
-      } else {
-        await previewSelectedAttachment();
-      }
-      panel?.focus();
+    // Name (and thumbnail) click: Ctrl/Cmd+click downloads, plain click previews.
+    item.querySelectorAll('.attachment-name, .attachment-thumb').forEach(el => {
+      el.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!panelHadFocus) { panel?.focus(); return; }
+        selectedAttachmentIndex = idx;
+        updateAttachmentSelection(listEl);
+        if ((e as MouseEvent).ctrlKey || (e as MouseEvent).metaKey) {
+          await downloadAttachmentByIndex(idx);
+        } else {
+          await previewSelectedAttachment();
+        }
+        panel?.focus();
+      });
     });
 
-    // Click on row (outside name/checkbox): focus-only if panel wasn't focused, else move cursor
-    row.addEventListener('click', () => {
+    // Click elsewhere on the row/tile: focus-only if unfocused, else move cursor.
+    item.addEventListener('click', () => {
       if (!panelHadFocus) { panel?.focus(); return; }
       selectedAttachmentIndex = idx;
-      renderAttachmentRows(listEl);
+      updateAttachmentSelection(listEl);
       panel?.focus();
     });
   });
+}
 
-  // Scroll selected row into view
-  const selectedRow = listEl.querySelector('.attachment-row.selected');
-  selectedRow?.scrollIntoView({ block: 'nearest' });
+// Lightweight selection update \u2014 toggles classes/checkbox glyphs only, no DOM
+// teardown. Safe to call on every navigation keystroke.
+function updateAttachmentSelection(listEl: HTMLElement): void {
+  listEl.querySelectorAll<HTMLElement>('[data-index]').forEach(item => {
+    const idx = parseInt(item.dataset.index!, 10);
+    const isMulti = multiSelectedAttachments.has(idx);
+    item.classList.toggle('selected', idx === selectedAttachmentIndex);
+    item.classList.toggle('multi-selected', isMulti);
+    const cb = item.querySelector('.attachment-checkbox');
+    if (cb) cb.textContent = isMulti ? '\u2611' : '\u2610';
+  });
+  listEl.querySelector<HTMLElement>('[data-index].selected')?.scrollIntoView({ block: 'nearest' });
+}
+
+// Simple concurrency-limited runner: process items with at most `limit` in
+// flight at once. Keeps the burst of contents-API calls polite on grid open.
+async function runPool<T>(items: T[], worker: (item: T) => Promise<void>, limit = 4): Promise<void> {
+  let next = 0;
+  const runNext = async (): Promise<void> => {
+    const idx = next++;
+    if (idx >= items.length) return;
+    await worker(items[idx]);
+    return runNext();
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runNext));
+}
+
+// Fetch image bytes for an attachment, cache-first (IndexedDB keyed by sha).
+async function loadThumbBlob(a: Attachment): Promise<Blob | null> {
+  const cached = await getThumb(a.sha);
+  if (cached) return cached;
+  const ar = getAttachmentsRepo();
+  if (!ar || !state) return null;
+  const { blob } = await fetchAttachmentBlob(state.host, state.token, ar.owner, ar.repo, a.path);
+  await putThumb(a.sha, blob);
+  return blob;
+}
+
+// Populate the <img> thumbnails for image tiles in the current grid build.
+function loadGridThumbnails(listEl: HTMLElement): void {
+  const myGen = ++thumbLoadGeneration;
+  const images = currentAttachments
+    .map((a, i) => ({ a, i }))
+    .filter(({ a }) => isImageAttachment(a.name));
+
+  const setImg = (thumb: HTMLElement, url: string, alt: string): void => {
+    const img = document.createElement('img');
+    img.className = 'attachment-thumb-img';
+    img.alt = alt;
+    img.src = url;
+    img.onerror = () => {
+      thumb.classList.add('attachment-thumb-file');
+      thumb.innerHTML = '<span class="attachment-file-ext">IMG</span>';
+    };
+    thumb.innerHTML = '';
+    thumb.appendChild(img);
+  };
+
+  void runPool(images, async ({ a, i }) => {
+    if (myGen !== thumbLoadGeneration) return; // grid rebuilt/closed since
+    const thumb = listEl.querySelector<HTMLElement>(`[data-index="${i}"] .attachment-thumb`);
+    if (!thumb || !document.body.contains(thumb)) return;
+
+    // Reuse a session object URL if we already minted one for these bytes.
+    const existing = thumbObjectUrls.get(a.sha);
+    if (existing) { setImg(thumb, existing, a.name); return; }
+
+    try {
+      const blob = await loadThumbBlob(a);
+      if (!blob || myGen !== thumbLoadGeneration || !document.body.contains(thumb)) return;
+      let url = thumbObjectUrls.get(a.sha);
+      if (!url) { url = URL.createObjectURL(blob); thumbObjectUrls.set(a.sha, url); }
+      setImg(thumb, url, a.name);
+    } catch {
+      thumb.classList.add('attachment-thumb-file');
+      thumb.innerHTML = '<span class="attachment-file-ext">ERR</span>';
+    }
+  }, 4);
+}
+
+function toggleAttachmentView(): void {
+  attachmentViewMode = attachmentViewMode === 'grid' ? 'list' : 'grid';
+  localStorage.setItem(LS_ATTACH_VIEW, attachmentViewMode);
+  document.getElementById('attachment-panel')?.classList.toggle('attachment-panel-grid', attachmentViewMode === 'grid');
+  const listEl = document.getElementById('attachment-list');
+  if (listEl) renderAttachmentList(listEl);
+  updateViewToggleChip();
+  document.getElementById('attachment-panel')?.focus();
+}
+
+function updateViewToggleChip(): void {
+  const label = document.getElementById('attach-view-label');
+  if (label) label.textContent = attachmentViewMode === 'grid' ? 'List' : 'Grid';
 }
 
 function moveAttachmentSelection(delta: number): void {
   if (currentAttachments.length === 0) return;
   selectedAttachmentIndex = Math.max(0, Math.min(currentAttachments.length - 1, selectedAttachmentIndex + delta));
   const listEl = document.getElementById('attachment-list');
-  if (listEl) renderAttachmentRows(listEl);
+  if (listEl) updateAttachmentSelection(listEl);
 }
 
 async function uploadAndInsertImage(file: File): Promise<void> {
@@ -1837,7 +1989,7 @@ async function uploadFiles(files: File[]): Promise<void> {
   }
 
   const listEl = document.getElementById('attachment-list');
-  if (listEl) renderAttachmentRows(listEl);
+  if (listEl) renderAttachmentList(listEl);
 
   if (uploadedLinks.length > 0) {
     let copied = false;
@@ -1932,7 +2084,7 @@ function toggleMultiSelect(): void {
     multiSelectedAttachments.add(selectedAttachmentIndex);
   }
   const listEl = document.getElementById('attachment-list');
-  if (listEl) renderAttachmentRows(listEl);
+  if (listEl) updateAttachmentSelection(listEl);
 }
 
 async function deleteSelectedAttachments(): Promise<void> {
@@ -1974,7 +2126,7 @@ async function deleteSelectedAttachments(): Promise<void> {
     multiSelectedAttachments.clear();
     selectedAttachmentIndex = Math.min(selectedAttachmentIndex, Math.max(0, currentAttachments.length - 1));
     const listEl = document.getElementById('attachment-list');
-    if (listEl) renderAttachmentRows(listEl);
+    if (listEl) renderAttachmentList(listEl);
     document.getElementById('attachment-panel')?.focus();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
