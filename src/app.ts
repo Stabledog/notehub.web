@@ -1507,6 +1507,7 @@ function toggleAttachmentPanel(): void {
 }
 
 function closeAttachmentPanel(): void {
+  closeAttachmentContextMenu();
   document.getElementById('attachment-panel')?.remove();
   currentAttachments = [];
   selectedAttachmentIndex = 0;
@@ -1552,6 +1553,7 @@ async function openAttachmentPanel(prefetchedAttachments?: Attachment[], opts?: 
       <span class="footer-action" data-action="upload"><kbd>a</kbd> Upload</span>
       <span class="footer-action" data-action="download"><kbd>Enter</kbd> Download</span>
       <span class="footer-action" data-action="preview"><kbd>p</kbd> Preview</span>
+      <span class="footer-action" data-action="copylink"><kbd>y</kbd> Copy link</span>
       <span class="footer-action" data-action="delete"><kbd>x</kbd> Delete</span>
       <span class="footer-action" data-action="close"><kbd>Esc</kbd> Close</span>
     </div>
@@ -1578,6 +1580,7 @@ async function openAttachmentPanel(prefetchedAttachments?: Attachment[], opts?: 
       else if (action === 'upload') await handleAttachmentUpload();
       else if (action === 'download') await downloadSelectedAttachment();
       else if (action === 'preview') await previewSelectedAttachment();
+      else if (action === 'copylink') await copySelectedAttachmentLinks();
       else if (action === 'delete') await deleteSelectedAttachments();
       else if (action === 'close') closeAttachmentPanel();
       panel.focus();
@@ -1609,6 +1612,9 @@ async function openAttachmentPanel(prefetchedAttachments?: Attachment[], opts?: 
     } else if (e.key === 'v' && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       toggleAttachmentView();
+    } else if (e.key === 'y' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      await copySelectedAttachmentLinks();
     } else if (e.key === 'x') {
       e.preventDefault();
       await deleteSelectedAttachments();
@@ -1786,6 +1792,19 @@ function attachSelectionHandlers(listEl: HTMLElement): void {
       updateAttachmentSelection(listEl);
       panel?.focus();
     });
+
+    // Right-click: our own menu with browser-worthy links. Acts on the whole
+    // multi-selection if the target is part of it, else on just this item.
+    item.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const inMulti = multiSelectedAttachments.has(idx);
+      const indices = inMulti ? [...multiSelectedAttachments].sort((a, b) => a - b) : [idx];
+      if (!inMulti) {
+        selectedAttachmentIndex = idx;
+        updateAttachmentSelection(listEl);
+      }
+      showAttachmentContextMenu((e as MouseEvent).clientX, (e as MouseEvent).clientY, indices);
+    });
   });
 }
 
@@ -1801,6 +1820,109 @@ function updateAttachmentSelection(listEl: HTMLElement): void {
     if (cb) cb.textContent = isMulti ? '\u2611' : '\u2610';
   });
   listEl.querySelector<HTMLElement>('[data-index].selected')?.scrollIntoView({ block: 'nearest' });
+}
+
+// Browser-worthy link to a file's GitHub/GHES "blob" page — i.e. what you'd get
+// by putting the file's path in the URL bar. Points at the PRIVATE attachments
+// repo, so it resolves only in a browser authenticated to that repo (accepted).
+function attachmentBlobUrl(a: Attachment | undefined): string | null {
+  if (!a || !state) return null;
+  const ar = getAttachmentsRepo();
+  if (!ar) return null;
+  return `https://${state.host}/${ar.owner}/${ar.repo}/blob/main/${a.path}`;
+}
+
+function attachmentsFolderUrl(): string | null {
+  const buf = activeBuffer();
+  const ar = getAttachmentsRepo();
+  if (!buf || !ar || !state) return null;
+  const n = buf.note;
+  return `https://${state.host}/${ar.owner}/${ar.repo}/tree/main/${n.owner}/${n.repo}/${n.number}`;
+}
+
+async function copyAttachmentLinks(indices: number[]): Promise<void> {
+  const urls = indices
+    .map(i => attachmentBlobUrl(currentAttachments[i]))
+    .filter((u): u is string => !!u);
+  if (urls.length === 0) return;
+  try {
+    await copyText(urls.join('\n'));
+    showStatus(urls.length === 1 ? 'Link copied' : `${urls.length} links copied`);
+  } catch (err) {
+    showStatus(`Copy failed: ${err instanceof Error ? err.message : err}`, true);
+  }
+}
+
+// Copy links for the active selection: the multi-selection if any, else the cursor.
+async function copySelectedAttachmentLinks(): Promise<void> {
+  const indices = multiSelectedAttachments.size > 0
+    ? [...multiSelectedAttachments].sort((a, b) => a - b)
+    : [selectedAttachmentIndex];
+  await copyAttachmentLinks(indices);
+}
+
+// --- Attachment right-click context menu ---------------------------------
+// The menu is appended to <body> with fixed positioning so the panel's
+// overflow:auto never clips it, and torn down on outside-click/Esc/scroll/resize.
+
+function closeAttachmentContextMenu(): void {
+  document.getElementById('attachment-context-menu')?.remove();
+  document.removeEventListener('keydown', onContextMenuKeydown, true);
+  document.removeEventListener('click', closeAttachmentContextMenu);
+  window.removeEventListener('scroll', closeAttachmentContextMenu, true);
+  window.removeEventListener('resize', closeAttachmentContextMenu);
+}
+
+function onContextMenuKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation(); // don't let the panel's Esc handler also close the panel
+    closeAttachmentContextMenu();
+    document.getElementById('attachment-panel')?.focus();
+  }
+}
+
+function showAttachmentContextMenu(x: number, y: number, indices: number[]): void {
+  closeAttachmentContextMenu();
+  const n = indices.length;
+  const actions: { label: string; run: () => void | Promise<void> }[] = [
+    { label: n > 1 ? `Copy ${n} links` : 'Copy link', run: () => copyAttachmentLinks(indices) },
+  ];
+  if (n === 1) {
+    const url = attachmentBlobUrl(currentAttachments[indices[0]]);
+    if (url) actions.push({ label: 'Open in GitHub', run: () => { window.open(url, '_blank'); } });
+  } else {
+    const folder = attachmentsFolderUrl();
+    if (folder) actions.push({ label: 'Open folder in GitHub', run: () => { window.open(folder, '_blank'); } });
+  }
+
+  const menu = document.createElement('div');
+  menu.id = 'attachment-context-menu';
+  menu.className = 'attachment-context-menu';
+  menu.innerHTML = actions
+    .map((a, i) => `<button class="attachment-context-item" data-i="${i}">${escapeHtml(a.label)}</button>`)
+    .join('');
+  document.body.appendChild(menu);
+
+  // Clamp into the viewport.
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - rect.width - 4))}px`;
+  menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - rect.height - 4))}px`;
+
+  menu.querySelectorAll<HTMLButtonElement>('.attachment-context-item').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation(); // keep the outside-click closer from firing first
+      closeAttachmentContextMenu();
+      await actions[parseInt(btn.dataset.i!, 10)].run();
+      document.getElementById('attachment-panel')?.focus();
+    });
+  });
+
+  // Defer the outside-click listener so the current event doesn't instantly close it.
+  setTimeout(() => document.addEventListener('click', closeAttachmentContextMenu), 0);
+  document.addEventListener('keydown', onContextMenuKeydown, true);
+  window.addEventListener('scroll', closeAttachmentContextMenu, true);
+  window.addEventListener('resize', closeAttachmentContextMenu);
 }
 
 // Simple concurrency-limited runner: process items with at most `limit` in
