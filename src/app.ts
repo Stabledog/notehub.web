@@ -20,7 +20,7 @@ const LS_ATTACH_VIEW = 'notehub:attachView';
 // Freshness check tuning (see checkFreshness). A buffer older than STALE_WINDOW_MS
 // is treated as suspect on the next edit; focus/visibility checks use a much shorter
 // debounce since "switch to this window" should catch changes almost immediately.
-const STALE_WINDOW_MS = 2 * 60 * 1000;
+const STALE_WINDOW_MS = 1 * 60 * 1000;
 const FOCUS_DEBOUNCE_MS = 5 * 1000;
 
 interface AppState {
