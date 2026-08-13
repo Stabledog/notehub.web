@@ -979,6 +979,36 @@ thead th {
   border-color: var(--red);
 }
 
+.freshness-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface0);
+  border-bottom: 1px solid var(--peach);
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+.freshness-banner span {
+  flex: 1;
+}
+
+.freshness-banner button {
+  padding: 0.3rem 0.75rem;
+  border-radius: 4px;
+  border: 1px solid var(--surface1);
+  background: var(--surface1);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.freshness-banner button#freshness-reload {
+  background: var(--peach);
+  color: var(--base);
+  border-color: var(--peach);
+}
+
 .version-badge {
   position: fixed;
   bottom: 10px;

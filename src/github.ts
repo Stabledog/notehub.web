@@ -43,6 +43,7 @@ async function apiFetch<T>(host: string, token: string, path: string, init?: Req
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const res = await fetch(`${apiBase(host)}${path}`, {
+        cache: 'no-cache',
         ...init,
         headers: { ...headers(token), ...init?.headers },
       });

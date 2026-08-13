@@ -1,4 +1,4 @@
-import { validateToken, repoExists, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentBlob, fetchAttachmentCounts, getAttachmentsRepoInfo, DEFAULT_HOST, type NoteSearchResult, type Attachment } from './github';
+import { validateToken, repoExists, searchNotes, getNote, updateNote, createNote, archiveNote, listAttachments, uploadAttachment, deleteAttachment, fetchAttachmentBlob, fetchAttachmentCounts, getAttachmentsRepoInfo, DEFAULT_HOST, type NoteSearchResult, type Attachment, type GitHubIssue } from './github';
 import { logError, logWarn, logInfo, createLogViewer } from './logging-client';
 import { parseHash, buildHash, navigate, replaceRoute, startRouter, type Route } from './router';
 import { getThumb, putThumb } from './thumb-cache';
@@ -16,6 +16,12 @@ const LS_HOST = 'notehub:host';
 const LS_DEFAULT_REPO = 'notehub:defaultRepo';
 const LS_PINNED_ISSUE = 'notehub:pinnedIssue';
 const LS_ATTACH_VIEW = 'notehub:attachView';
+
+// Freshness check tuning (see checkFreshness). A buffer older than STALE_WINDOW_MS
+// is treated as suspect on the next edit; focus/visibility checks use a much shorter
+// debounce since "switch to this window" should catch changes almost immediately.
+const STALE_WINDOW_MS = 2 * 60 * 1000;
+const FOCUS_DEBOUNCE_MS = 5 * 1000;
 
 interface AppState {
   host: string;
@@ -81,10 +87,19 @@ interface NoteBuffer {
   attachments: Attachment[];
   selectedAttachmentIndex: number;
   multiSelectedAttachments: Set<number>;
+  // Freshness tracking (see checkFreshness): when this buffer's content was last
+  // known to match the server, and which remote updated_at (if any) the user has
+  // already dismissed a "changed upstream" banner for.
+  lastFetchedAt: number;
+  staleDismissedAt: string | null;
 }
 
 function createNoteBuffer(note: NoteSearchResult, body: string, title: string, updatedAt: string | null): NoteBuffer {
-  return { note, originalBody: body, originalTitle: title, loadedUpdatedAt: updatedAt, attachments: [], selectedAttachmentIndex: 0, multiSelectedAttachments: new Set() };
+  return {
+    note, originalBody: body, originalTitle: title, loadedUpdatedAt: updatedAt,
+    attachments: [], selectedAttachmentIndex: 0, multiSelectedAttachments: new Set(),
+    lastFetchedAt: Date.now(), staleDismissedAt: null,
+  };
 }
 
 let state: AppState | null = null;
@@ -96,6 +111,12 @@ let titleHandle: ReturnType<typeof import('./veditor').createVimInput> | null = 
 const noteBuffers = new Map<string, NoteBuffer>();
 let activeNoteKey: string | null = null; // "owner/repo/number"
 let lastFetchedNotesList: NoteSearchResult[] = []; // cache for onListDocuments
+
+// Freshness check state (see checkFreshness). saveInFlight prevents a background
+// freshness check from racing the save path's own conflict check.
+let saveInFlight = false;
+let freshnessCheckInFlight = false;
+let lastFocusFreshnessCheckAt = 0;
 
 function activeBuffer(): NoteBuffer | null {
   return activeNoteKey ? (noteBuffers.get(activeNoteKey) ?? null) : null;
@@ -194,6 +215,13 @@ export async function init(): Promise<void> {
       row.focus();
     }
   });
+
+  // Freshness check trigger: catch a note that changed upstream as soon as this
+  // window/tab regains focus (see checkFreshness).
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) scheduleFocusFreshnessCheck();
+  });
+  window.addEventListener('focus', scheduleFocusFreshnessCheck);
 }
 
 function showSettings(error?: string): void {
@@ -956,6 +984,7 @@ async function openNote(owner: string, repo: string, number: number): Promise<vo
     activeNoteKey = key;
     const buf = noteBuffers.get(key)!;
     renderEditor(buf.note.title, buf.originalBody, buf);
+    void checkFreshness('switch');
     return;
   }
 
@@ -997,6 +1026,136 @@ function onBufferActivated(key: string, buf: NoteBuffer): void {
   if (document.getElementById('attachment-panel')) {
     closeAttachmentPanel();
   }
+
+  // A freshness banner belongs to the buffer that was active when it appeared;
+  // this path doesn't re-render the editor screen, so it wouldn't otherwise be
+  // cleared when switching away from that buffer.
+  hideFreshnessBanner();
+  void checkFreshness('switch');
+}
+
+// ---------------------------------------------------------------------------
+// Freshness checks — catch a stale note *before* it becomes a save conflict.
+//
+// This does not replace the save-path conflict check above; it just shrinks the
+// window in which a conflict can happen by refreshing the active buffer earlier:
+//   - 'edit'  — the buffer just went clean->dirty (see onDirty), and it's been
+//               more than STALE_WINDOW_MS since we last confirmed it was current.
+//               This is the case where the window never lost focus — e.g. editing
+//               continuously on machine A while machine B saved in the background.
+//   - 'focus' — the window/tab just became visible. No staleness gate: switching
+//               to this window shortly after another machine saved is the most
+//               common case, and re-checking every time is cheap and immediate.
+//   - 'switch'— veditor (or notehub's own re-open-an-existing-buffer path) just
+//               activated this buffer. No staleness gate, for the same reason.
+// A clean buffer is refreshed silently; a dirty one gets a dismissible banner
+// instead — never a modal, and never a nag on network failure.
+// ---------------------------------------------------------------------------
+
+function isBufferDirty(buf: NoteBuffer): boolean {
+  const bodyDirty = veditor.getEditorContent() !== buf.originalBody;
+  const titleDirty = (titleHandle?.getValue() ?? '').trim() !== buf.originalTitle;
+  return bodyDirty || titleDirty;
+}
+
+async function checkFreshness(reason: 'edit' | 'focus' | 'switch'): Promise<void> {
+  if (!state || freshnessCheckInFlight || saveInFlight) return;
+  const key = activeNoteKey;
+  const buf = activeBuffer();
+  if (!key || !buf) return; // no active note (list/settings screen, or an unsaved new note)
+
+  if (reason === 'edit' && Date.now() - buf.lastFetchedAt < STALE_WINDOW_MS) return;
+
+  freshnessCheckInFlight = true;
+  try {
+    const fresh = await getNote(state.host, state.token, buf.note.owner, buf.note.repo, buf.note.number);
+
+    // The user may have saved, switched buffers, or navigated to the list while
+    // this was in flight; only apply the result if it's still the same buffer.
+    if (activeNoteKey !== key || noteBuffers.get(key) !== buf) return;
+
+    buf.lastFetchedAt = Date.now();
+    if (!buf.loadedUpdatedAt || fresh.updated_at === buf.loadedUpdatedAt) return; // not stale
+
+    const canSilentRefresh = typeof veditor.setEditorContent === 'function';
+    if (!isBufferDirty(buf) && canSilentRefresh) {
+      applyRefresh(buf, fresh);
+      return;
+    }
+
+    if (buf.staleDismissedAt === fresh.updated_at) return; // already warned + dismissed for this version
+    showFreshnessBanner(buf, fresh);
+  } catch (err) {
+    // Never nag on a failed check (network blip, note deleted upstream, etc) —
+    // the save-path conflict check remains the backstop of record.
+    logWarn(`Note: Freshness check (${reason}) failed for #${buf.note.number}: ${err instanceof Error ? err.message : err}`);
+  } finally {
+    freshnessCheckInFlight = false;
+  }
+}
+
+/** Apply a confirmed-fresh remote copy to the active buffer, in place. */
+function applyRefresh(buf: NoteBuffer, fresh: GitHubIssue): void {
+  const isStillActive = activeNoteKey !== null && noteBuffers.get(activeNoteKey) === buf;
+  if (isStillActive && typeof veditor.setEditorContent === 'function') {
+    veditor.setEditorContent(fresh.body ?? '');
+    titleHandle?.setValue(fresh.title);
+  }
+  buf.originalBody = fresh.body ?? '';
+  buf.originalTitle = fresh.title;
+  buf.loadedUpdatedAt = fresh.updated_at;
+  buf.note = { ...fresh, owner: buf.note.owner, repo: buf.note.repo };
+  buf.lastFetchedAt = Date.now();
+  buf.staleDismissedAt = null;
+  hideFreshnessBanner();
+  if (isStillActive) showStatus('Refreshed from upstream');
+}
+
+function hideFreshnessBanner(): void {
+  document.getElementById('freshness-banner')?.remove();
+}
+
+function showFreshnessBanner(buf: NoteBuffer, fresh: GitHubIssue): void {
+  hideFreshnessBanner();
+  const screen = document.querySelector('.editor-screen');
+  const container = document.getElementById('editor-container');
+  if (!screen || !container) return;
+
+  const canSilentRefresh = typeof veditor.setEditorContent === 'function';
+  const bar = document.createElement('div');
+  bar.id = 'freshness-banner';
+  bar.className = 'freshness-banner';
+  bar.innerHTML = `
+    <span>This note changed upstream.</span>
+    <button id="freshness-reload">Reload</button>
+    <button id="freshness-keep">Keep mine</button>
+  `;
+  screen.insertBefore(bar, container);
+
+  bar.querySelector('#freshness-reload')!.addEventListener('click', () => {
+    if (canSilentRefresh) {
+      applyRefresh(buf, fresh);
+    } else {
+      // Belt-and-braces fallback for an old cached veditor build without
+      // setEditorContent — this should only matter if notehub was deployed
+      // ahead of veditor.web. There's no in-place way to reload without it.
+      location.reload();
+    }
+  });
+  bar.querySelector('#freshness-keep')!.addEventListener('click', () => {
+    buf.staleDismissedAt = fresh.updated_at;
+    hideFreshnessBanner();
+  });
+}
+
+/** Focus/visibility trigger, debounced so a focus+visibilitychange pair (or rapid
+ * alt-tabbing) doesn't fire the check twice in quick succession. */
+function scheduleFocusFreshnessCheck(): void {
+  if (currentScreen !== 'edit' || !activeNoteKey || newNoteTarget || document.hidden) return;
+  const now = Date.now();
+  if (now - lastFocusFreshnessCheckAt < FOCUS_DEBOUNCE_MS) return;
+  lastFocusFreshnessCheckAt = now;
+  void checkFreshness('focus');
 }
 
 function makeSaveCallback(getBuf: () => NoteBuffer | null): () => Promise<void> {
@@ -1045,15 +1204,18 @@ function makeSaveCallback(getBuf: () => NoteBuffer | null): () => Promise<void> 
 
     if (Object.keys(data).length === 0) { showStatus('No changes'); return; }
 
+    saveInFlight = true;
     try {
       showStatus('Saving...');
       logInfo(`Note: Save initiated for #${buf.note.number}`);
 
       const fresh = await getNote(state.host, state.token, buf.note.owner, buf.note.repo, buf.note.number);
+      buf.lastFetchedAt = Date.now(); // we just talked to the server, regardless of outcome below
       if (buf.loadedUpdatedAt && fresh.updated_at !== buf.loadedUpdatedAt) {
-        logWarn(`Note: Remote conflict detected for #${buf.note.number}; user chose to overwrite`);
+        logWarn(`Note: Remote conflict detected for #${buf.note.number}; awaiting user choice`);
         const overwrite = await showConflictDialog();
         if (!overwrite) { logInfo(`Note: Save cancelled due to conflict`); showStatus('Save cancelled'); return; }
+        logWarn(`Note: Remote conflict for #${buf.note.number}; user chose to overwrite`);
       }
 
       const updated = await updateNote(state.host, state.token, buf.note.owner, buf.note.repo, buf.note.number, data);
@@ -1062,11 +1224,16 @@ function makeSaveCallback(getBuf: () => NoteBuffer | null): () => Promise<void> 
       buf.originalTitle = updated.title;
       buf.loadedUpdatedAt = updated.updated_at;
       buf.note = { ...updated, owner: buf.note.owner, repo: buf.note.repo };
+      buf.lastFetchedAt = Date.now();
+      buf.staleDismissedAt = null;
+      hideFreshnessBanner();
       showStatus('Saved');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logError(`Note: Save failed for #${buf.note.number}: ${msg}`);
       showStatus(`Save failed: ${msg}`, true);
+    } finally {
+      saveInFlight = false;
     }
   };
 }
@@ -1117,6 +1284,7 @@ function makeBufferCallbacks(getBuf: () => NoteBuffer | null): import('./veditor
       const buf = noteBuffers.get(newId);
       if (buf) onBufferActivated(newId, buf);
     },
+    onDirty: () => { void checkFreshness('edit'); },
     onListDocuments: async () =>
       lastFetchedNotesList.map(n => ({ id: `${n.owner}/${n.repo}/${n.number}`, label: n.title })),
     onLoadDocument: loadDocument,

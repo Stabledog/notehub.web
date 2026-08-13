@@ -14,6 +14,7 @@ export interface VEditorCallbacks {
   onListDocuments?: () => Promise<DocEntry[]>;
   onLoadDocument?: (id: string) => Promise<{ content: string; label: string; callbacks: VEditorCallbacks }>;
   onBufferSwitch?: (id: string, label: string) => void;
+  onDirty?: () => void;
 }
 
 export interface HelpSection {
@@ -42,6 +43,7 @@ export function createEditor(
 
 export function insertAtCursor(text: string): void;
 export function getEditorContent(): string;
+export function setEditorContent(content: string, opts?: { bufferId?: string }): void;
 export function isEditorDirty(original: string): boolean;
 export function focusEditor(): void;
 export function destroyEditor(): void;
