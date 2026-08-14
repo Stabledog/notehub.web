@@ -104,8 +104,54 @@ function createNoteBuffer(note: NoteSearchResult, body: string, title: string, u
 
 let state: AppState | null = null;
 let newNoteTarget: { owner: string; repo: string } | null = null;
-let justCreatedNote: NoteSearchResult | null = null;
 let titleHandle: ReturnType<typeof import('./veditor').createVimInput> | null = null;
+
+// List overlay — reconciles the note list against searchNotes()'s eventual
+// consistency. `add` force-shows notes the index hasn't caught up on yet
+// (freshly created, or a move destination); `remove` force-hides notes we
+// know are gone (a move source we just closed) even though the index may
+// still list them as open for a while. Each entry converges (self-deletes)
+// once a subsequent fetch confirms it, and the whole overlay expires as a
+// backstop so a divergence from reality can never wedge the list permanently.
+interface ListOverlay {
+  add: Map<string, NoteSearchResult>;
+  remove: Set<string>;
+  expiresAt: number;
+}
+const OVERLAY_TTL_MS = 60_000;
+const listOverlay: ListOverlay = { add: new Map(), remove: new Set(), expiresAt: 0 };
+
+function noteKey(n: { owner: string; repo: string; number: number }): string {
+  return `${n.owner}/${n.repo}/${n.number}`;
+}
+
+function overlayAdd(n: NoteSearchResult): void {
+  listOverlay.add.set(noteKey(n), n);
+  listOverlay.expiresAt = Date.now() + OVERLAY_TTL_MS;
+}
+
+function overlayRemove(n: { owner: string; repo: string; number: number }): void {
+  listOverlay.remove.add(noteKey(n));
+  listOverlay.expiresAt = Date.now() + OVERLAY_TTL_MS;
+}
+
+function applyListOverlay(fresh: NoteSearchResult[]): NoteSearchResult[] {
+  if (Date.now() > listOverlay.expiresAt) {
+    listOverlay.add.clear();
+    listOverlay.remove.clear();
+    return fresh;
+  }
+  const freshKeys = new Set(fresh.map(noteKey));
+  for (const key of listOverlay.add.keys()) {
+    if (freshKeys.has(key)) listOverlay.add.delete(key);
+  }
+  for (const key of listOverlay.remove) {
+    if (!freshKeys.has(key)) listOverlay.remove.delete(key);
+  }
+  const kept = fresh.filter(n => !listOverlay.remove.has(noteKey(n)));
+  const stillPending = [...listOverlay.add.values()].filter(n => !freshKeys.has(noteKey(n)));
+  return [...stillPending, ...kept];
+}
 
 // Multi-buffer note state
 const noteBuffers = new Map<string, NoteBuffer>();
@@ -397,7 +443,9 @@ async function showNoteList(): Promise<void> {
       </header>
       <div class="toolbar">
         <button id="new-note">New Note</button>
+        <button id="move-notes" disabled>Move</button>
         <button id="refresh">Refresh</button>
+        <span id="status-msg"></span>
       </div>
       <div id="notes-container"><p>Loading...</p></div>
       <footer class="note-list-footer">
@@ -412,6 +460,31 @@ async function showNoteList(): Promise<void> {
 
   const container = document.getElementById('notes-container')!;
   let selectedIndex = 0;
+  const selectedNoteIndices = new Set<number>();
+
+  function updateMoveButtonState(): void {
+    const btn = document.getElementById('move-notes') as HTMLButtonElement | null;
+    if (!btn) return;
+    btn.disabled = selectedNoteIndices.size === 0;
+    btn.textContent = selectedNoteIndices.size > 0 ? `Move (${selectedNoteIndices.size})` : 'Move';
+  }
+
+  /** Binds checkbox change/click handlers for whatever `.note-select-cb` elements
+   * currently exist in the container. Idempotent — safe to call after any
+   * re-render (initial render, search dismiss, search results). */
+  function bindNoteCheckboxes(): void {
+    container.querySelectorAll<HTMLInputElement>('.note-select-cb').forEach(cb => {
+      const idx = parseInt(cb.dataset.index!, 10);
+      cb.checked = selectedNoteIndices.has(idx);
+      cb.addEventListener('click', (e) => e.stopPropagation());
+      cb.addEventListener('change', () => {
+        if (cb.checked) selectedNoteIndices.add(idx);
+        else selectedNoteIndices.delete(idx);
+        updateMoveButtonState();
+      });
+    });
+    updateMoveButtonState();
+  }
 
   function updateSelection() {
     const rows = container.querySelectorAll('.note-row');
@@ -602,10 +675,11 @@ async function showNoteList(): Promise<void> {
 
     container.innerHTML = `
       <table>
-        <thead><tr><th>Title</th><th>#</th><th></th><th>Context</th><th>Updated</th><th>Repo</th></tr></thead>
+        <thead><tr><th></th><th>Title</th><th>#</th><th></th><th>Context</th><th>Updated</th><th>Repo</th></tr></thead>
         <tbody>
           ${matches.map((m, i) => `
             <tr class="note-row" data-index="${m.index}" data-result-index="${i}">
+              <td><input type="checkbox" class="note-select-cb" data-index="${m.index}" onclick="event.stopPropagation()"></td>
               <td>${escapeHtml(m.note.title)}</td>
               <td>${m.note.number}</td>
               <td></td>
@@ -620,6 +694,7 @@ async function showNoteList(): Promise<void> {
 
     selectedIndex = 0;
     updateSelection();
+    bindNoteCheckboxes();
 
     // Bind click handlers for search result rows
     container.querySelectorAll('.note-row').forEach(row => {
@@ -695,6 +770,8 @@ async function showNoteList(): Promise<void> {
         openNoteFromEvent(note, e as MouseEvent);
       });
     });
+
+    bindNoteCheckboxes();
   }
 
   document.getElementById('settings-btn')!.addEventListener('click', () => showSettings());
@@ -714,23 +791,13 @@ async function showNoteList(): Promise<void> {
 
   try {
     logInfo(`Note list: Fetching notes for all configured repos`);
-    notesList = await searchNotes(state.host, state.token);
+    const fetched = await searchNotes(state.host, state.token);
+    notesList = applyListOverlay(fetched);
+    // Snapshot which keys are still overlay-pending (i.e. not yet confirmed by
+    // the fetch above) so rows can be marked while the index catches up.
+    const overlayPendingKeys = new Set(listOverlay.add.keys());
     lastFetchedNotesList = notesList;
     logInfo(`Note list: Loaded ${notesList.length} notes`);
-
-    // If we just created a note, the Search API may not have indexed it yet.
-    // Merge it into the results if missing.
-    if (justCreatedNote) {
-      const jc = justCreatedNote;
-      justCreatedNote = null;
-      const alreadyPresent = notesList.some(
-        n => n.owner === jc.owner && n.repo === jc.repo && n.number === jc.number
-      );
-      if (!alreadyPresent) {
-        logWarn(`Note list: Search API may not have indexed newly created note yet; using cache`);
-        notesList.unshift(jc);
-      }
-    }
 
     // Pin the default issue to the top (if configured)
     const pinned = getPinnedIssue();
@@ -743,6 +810,15 @@ async function showNoteList(): Promise<void> {
     document.getElementById('new-note')!.addEventListener('click', () => {
       showRepoPicker(notesList);
     });
+    document.getElementById('move-notes')!.addEventListener('click', () => {
+      if (selectedNoteIndices.size === 0) return;
+      const selected = [...selectedNoteIndices].sort((a, b) => a - b).map(i => notesList[i]);
+      showRepoPicker(notesList, {
+        title: `Move ${selected.length} note${selected.length !== 1 ? 's' : ''}`,
+        excludeRepos: new Set(selected.map(n => `${n.owner}/${n.repo}`)),
+        onPick: (owner, repo) => { void runMove(selected, owner, repo); },
+      });
+    });
     if (notesList.length === 0) {
       container.innerHTML = '<p class="empty">No notes found.</p>';
       return;
@@ -750,10 +826,11 @@ async function showNoteList(): Promise<void> {
 
     container.innerHTML = `
       <table>
-        <thead><tr><th>Title</th><th>#</th><th></th><th>Updated</th><th></th><th>Repo</th></tr></thead>
+        <thead><tr><th></th><th>Title</th><th>#</th><th></th><th>Updated</th><th></th><th>Repo</th></tr></thead>
         <tbody>
           ${notesList.map((n, i) => `
-            <tr class="note-row" data-index="${i}">
+            <tr class="note-row${overlayPendingKeys.has(noteKey(n)) ? ' note-row-recent' : ''}" data-index="${i}"${overlayPendingKeys.has(noteKey(n)) ? ` title="Recently moved — GitHub's search index is catching up"` : ''}>
+              <td><input type="checkbox" class="note-select-cb" data-index="${i}" onclick="event.stopPropagation()"></td>
               <td>${escapeHtml(n.title)}<span class="attachment-count-badge" data-owner="${escapeAttr(n.owner)}" data-repo="${escapeAttr(n.repo)}" data-issue="${n.number}"></span></td>
               <td><a href="${escapeAttr(issueUrl(state!.host, n.owner, n.repo, n.number))}" target="${hashTarget(issueUrl(state!.host, n.owner, n.repo, n.number))}" class="issue-link" onclick="event.stopPropagation()">${n.number}</a></td>
               <td><button class="copy-url-btn" data-index="${i}" title="Copy URL">${clipboardIcon}</button></td>
@@ -765,6 +842,7 @@ async function showNoteList(): Promise<void> {
         </tbody>
       </table>
     `;
+    bindNoteCheckboxes();
 
     container.querySelectorAll('.copy-url-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -862,20 +940,28 @@ async function loadAttachmentBadges(_notes: NoteSearchResult[]): Promise<void> {
   });
 }
 
-function showRepoPicker(notesList: NoteSearchResult[]): void {
+function showRepoPicker(
+  notesList: NoteSearchResult[],
+  opts?: { title?: string; onPick?: (owner: string, repo: string) => void; excludeRepos?: Set<string> },
+): void {
   // Remove existing picker if any
   document.getElementById('repo-picker-overlay')?.remove();
 
+  const onPick = opts?.onPick ?? openNewNote;
+  const title = opts?.title ?? 'Select repository';
+
   // Extract unique owner/repo pairs, sorted with default repo first
   const repoSet = new Map<string, { owner: string; repo: string }>();
-  // Always include the default repo if configured
+  // Always include the default repo if configured (unless excluded — e.g. it's
+  // one of the notes being moved, and moving to its own repo is a no-op)
   const defaultRepo = getDefaultRepo();
-  if (defaultRepo) {
+  if (defaultRepo && !opts?.excludeRepos?.has(defaultRepo)) {
     const [defOwner, defRepo] = defaultRepo.split('/');
     repoSet.set(defaultRepo, { owner: defOwner, repo: defRepo });
   }
   for (const n of notesList) {
     const key = `${n.owner}/${n.repo}`;
+    if (opts?.excludeRepos?.has(key)) continue;
     if (!repoSet.has(key)) repoSet.set(key, { owner: n.owner, repo: n.repo });
   }
   const sortedRepos = Array.from(repoSet.entries()).sort((a, b) => {
@@ -890,7 +976,7 @@ function showRepoPicker(notesList: NoteSearchResult[]): void {
   overlay.id = 'repo-picker-overlay';
   overlay.innerHTML = `
     <div class="repo-picker">
-      <h2>Select repository</h2>
+      <h2>${escapeHtml(title)}</h2>
       <div class="repo-list">
         ${sortedRepos.map(([key, r]) => `
           <button class="repo-option" data-owner="${escapeAttr(r.owner)}" data-repo="${escapeAttr(r.repo)}">${escapeHtml(key)}</button>
@@ -925,7 +1011,7 @@ function showRepoPicker(notesList: NoteSearchResult[]): void {
       const repo = (btn as HTMLElement).dataset.repo!;
       overlay.remove();
       document.removeEventListener('keydown', onKey);
-      openNewNote(owner, repo);
+      onPick(owner, repo);
     });
   });
 
@@ -942,7 +1028,7 @@ function showRepoPicker(notesList: NoteSearchResult[]): void {
     }
     overlay.remove();
     document.removeEventListener('keydown', onKey);
-    openNewNote(parts[0], parts[1]);
+    onPick(parts[0], parts[1]);
   };
 
   goBtn.addEventListener('click', submitOther);
@@ -964,6 +1050,314 @@ async function openNewNote(owner: string, repo: string): Promise<void> {
   currentEditKey = null;
   replaceRoute({ screen: 'new', owner, repo });
   renderEditor(DEFAULT_NEW_TITLE, DEFAULT_NEW_BODY, null);
+}
+
+// ---------------------------------------------------------------------------
+// Move Note
+//
+// There is no delete-issue endpoint in GitHub's REST v3 API (GraphQL's
+// deleteIssue mutation needs admin rights most collaborators won't have), so
+// "move" is copy-then-close: create the note at the destination with a
+// backlink to the source, copy its attachments, then close the source with a
+// forward footer. Nothing is ever destroyed — the worst outcome of any
+// failure partway through is a harmless duplicate, never lost data. That
+// invariant is what allows every step below to fail forward instead of
+// rolling back.
+// ---------------------------------------------------------------------------
+
+interface NoteRef { owner: string; repo: string; number: number; title?: string }
+
+const MOVE_FROM_MARKER = '<!-- notehub:moved-from -->';
+const MOVE_TO_MARKER = '<!-- notehub:moved-to -->';
+
+function movedFromFooter(host: string, src: NoteRef): string {
+  return `\n\n---\n${MOVE_FROM_MARKER}\n> Moved from [${src.owner}/${src.repo}#${src.number}](${issueUrl(host, src.owner, src.repo, src.number)})`;
+}
+
+function movedToFooter(host: string, dest: NoteRef): string {
+  return `\n\n---\n${MOVE_TO_MARKER}\n> Moved to [${dest.owner}/${dest.repo}#${dest.number}](${issueUrl(host, dest.owner, dest.repo, dest.number)})`;
+}
+
+function hasMoveMarker(body: string): boolean {
+  return body.includes(MOVE_FROM_MARKER) || body.includes(MOVE_TO_MARKER);
+}
+
+type MoveOutcome =
+  | { status: 'moved'; src: NoteRef; dest: NoteSearchResult; attachmentsCopied: number }
+  | { status: 'partial'; src: NoteRef; dest: NoteSearchResult; stage: 'attachments' | 'close';
+      message: string; attachmentsCopied: number; attachmentsFailed: string[] }
+  | { status: 'failed'; src: NoteRef; stage: 'fetch' | 'create'; message: string }
+  | { status: 'skipped'; src: NoteRef; reason: 'aborted' };
+
+/** fetchAttachmentBlob has no retry of its own (unlike apiFetch-backed calls) —
+ * it's also the largest-payload call in the move pipeline, so give it one
+ * local retry here rather than changing the shared function's behavior for
+ * every caller. */
+async function fetchAttachmentBlobRetried(
+  host: string, token: string, owner: string, repo: string, path: string,
+): Promise<{ blob: Blob; filename: string }> {
+  try {
+    return await fetchAttachmentBlob(host, token, owner, repo, path);
+  } catch {
+    return await fetchAttachmentBlob(host, token, owner, repo, path);
+  }
+}
+
+async function moveOneNote(
+  src: NoteSearchResult,
+  dest: { owner: string; repo: string },
+  attachRepo: { owner: string; repo: string } | null,
+  knownAttachmentCount: number,
+  onProgress: (msg: string) => void,
+): Promise<MoveOutcome> {
+  const srcRef: NoteRef = { owner: src.owner, repo: src.repo, number: src.number, title: src.title };
+  if (!state) return { status: 'failed', src: srcRef, stage: 'fetch', message: 'Not authenticated' };
+  const host = state.host, token = state.token;
+
+  let fresh: GitHubIssue;
+  try {
+    onProgress(`Reading #${src.number}: ${src.title}`);
+    fresh = await getNote(host, token, src.owner, src.repo, src.number);
+  } catch (err) {
+    return { status: 'failed', src: srcRef, stage: 'fetch', message: err instanceof Error ? err.message : String(err) };
+  }
+
+  let created: GitHubIssue;
+  try {
+    onProgress(`Creating in ${dest.owner}/${dest.repo}: ${fresh.title}`);
+    const destBody = (fresh.body ?? '') + movedFromFooter(host, srcRef);
+    created = await createNote(host, token, dest.owner, dest.repo, fresh.title, destBody);
+  } catch (err) {
+    return { status: 'failed', src: srcRef, stage: 'create', message: err instanceof Error ? err.message : String(err) };
+  }
+  const destNote: NoteSearchResult = { ...created, owner: dest.owner, repo: dest.repo };
+
+  let attachmentsCopied = 0;
+  const attachmentsFailed: string[] = [];
+  if (attachRepo && knownAttachmentCount > 0) {
+    let files;
+    try {
+      onProgress(`Checking attachments for #${src.number}`);
+      files = await listAttachments(host, token, attachRepo.owner, attachRepo.repo, src.owner, src.repo, src.number);
+    } catch (err) {
+      return {
+        status: 'partial', src: srcRef, dest: destNote, stage: 'attachments',
+        message: `Could not list attachments: ${err instanceof Error ? err.message : String(err)}`,
+        attachmentsCopied, attachmentsFailed,
+      };
+    }
+    for (const file of files) {
+      try {
+        onProgress(`Copying attachment ${file.name}`);
+        const { blob } = await fetchAttachmentBlobRetried(host, token, attachRepo.owner, attachRepo.repo, file.path);
+        const base64 = await blobToBase64(blob);
+        await uploadAttachment(host, token, attachRepo.owner, attachRepo.repo, dest.owner, dest.repo, created.number, file.name, base64);
+        attachmentsCopied++;
+      } catch (err) {
+        logError(`Move: attachment copy failed for ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+        attachmentsFailed.push(file.name);
+      }
+    }
+    if (attachmentsFailed.length > 0) {
+      return {
+        status: 'partial', src: srcRef, dest: destNote, stage: 'attachments',
+        message: `${attachmentsFailed.length} of ${files.length} attachment(s) failed to copy`,
+        attachmentsCopied, attachmentsFailed,
+      };
+    }
+  }
+
+  const srcBody = fresh.body ?? '';
+  const closedBody = hasMoveMarker(srcBody) ? srcBody : srcBody + movedToFooter(host, destNote);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      onProgress(`Closing source #${src.number}`);
+      const closed = await updateNote(host, token, src.owner, src.repo, src.number, { body: closedBody, state: 'closed' });
+      if (closed.state !== 'closed') throw new Error('note was not closed');
+      return { status: 'moved', src: srcRef, dest: destNote, attachmentsCopied };
+    } catch (err) {
+      if (attempt === 1) {
+        return {
+          status: 'partial', src: srcRef, dest: destNote, stage: 'close',
+          message: err instanceof Error ? err.message : String(err),
+          attachmentsCopied, attachmentsFailed,
+        };
+      }
+    }
+  }
+  // Unreachable — the loop above always returns.
+  return { status: 'moved', src: srcRef, dest: destNote, attachmentsCopied };
+}
+
+/** Sequential by design: GitHub applies secondary rate limits to content-creating
+ * requests, and each note is a multi-step pipeline whose progress messages need
+ * to stay honest about "note i of N" — a concurrent pool would blur that. */
+async function moveNotes(
+  sources: NoteSearchResult[],
+  dest: { owner: string; repo: string },
+  attachmentCounts: Map<string, number> | null,
+  onStep: (i: number, total: number, msg: string) => void,
+  shouldStop: () => boolean,
+): Promise<MoveOutcome[]> {
+  if (!state) return [];
+  const attachRepo = getAttachmentsRepo();
+  const outcomes: MoveOutcome[] = [];
+  let aborted = false;
+
+  for (let i = 0; i < sources.length; i++) {
+    const src = sources[i];
+    const srcRef: NoteRef = { owner: src.owner, repo: src.repo, number: src.number, title: src.title };
+
+    if (aborted || (i > 0 && shouldStop())) {
+      outcomes.push({ status: 'skipped', src: srcRef, reason: 'aborted' });
+      continue;
+    }
+
+    const knownCount = attachmentCounts?.get(noteKey(src)) ?? 0;
+    const outcome = await moveOneNote(src, dest, attachRepo, knownCount, msg => onStep(i, sources.length, msg));
+    outcomes.push(outcome);
+
+    if (outcome.status === 'failed') {
+      // 401 = dead token, 403 = permission or secondary rate limit — neither
+      // will resolve itself for the remaining notes in this batch.
+      const status = /^GitHub API (\d+):/.exec(outcome.message)?.[1];
+      if (status === '401' || status === '403') aborted = true;
+    }
+
+    if (i < sources.length - 1) await new Promise(r => setTimeout(r, 300));
+  }
+  return outcomes;
+}
+
+function showMoveProgress(total: number): { update(i: number, msg: string): void; stopRequested(): boolean; close(): void } {
+  document.getElementById('move-progress-overlay')?.remove();
+  let stopFlag = false;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'move-progress-overlay';
+  overlay.innerHTML = `
+    <div class="move-progress-dialog">
+      <h3 id="move-progress-title">Moving 1 of ${total}...</h3>
+      <p id="move-progress-detail"></p>
+      <div class="move-progress-actions">
+        <button id="move-progress-stop">Stop after this note</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const stopBtn = overlay.querySelector('#move-progress-stop') as HTMLButtonElement;
+  stopBtn.addEventListener('click', () => {
+    stopFlag = true;
+    stopBtn.disabled = true;
+    stopBtn.textContent = 'Stopping after current note...';
+  });
+
+  return {
+    update(i: number, msg: string): void {
+      const titleEl = document.getElementById('move-progress-title');
+      const detailEl = document.getElementById('move-progress-detail');
+      if (titleEl) titleEl.textContent = `Moving ${i + 1} of ${total}...`;
+      if (detailEl) detailEl.textContent = msg;
+    },
+    stopRequested: () => stopFlag,
+    close: () => overlay.remove(),
+  };
+}
+
+function showMoveReport(outcomes: MoveOutcome[], dest: { owner: string; repo: string }): void {
+  if (!state) return;
+  document.getElementById('move-report-overlay')?.remove();
+
+  const movedCount = outcomes.filter(o => o.status === 'moved').length;
+  const total = outcomes.length;
+  const header = `Moved ${movedCount} of ${total} note${total !== 1 ? 's' : ''} to ${dest.owner}/${dest.repo}`;
+
+  if (movedCount === total) {
+    const toast = document.createElement('div');
+    toast.id = 'move-report-overlay';
+    toast.className = 'move-report-toast';
+    toast.textContent = header;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 1500);
+    return;
+  }
+
+  const rows = outcomes.filter(o => o.status !== 'moved').map(o => {
+    const srcLink = `<a href="${escapeAttr(issueUrl(state!.host, o.src.owner, o.src.repo, o.src.number))}" target="_blank">${escapeHtml(o.src.owner)}/${escapeHtml(o.src.repo)}#${o.src.number}</a>`;
+    if (o.status === 'partial') {
+      const destLink = `<a href="${escapeAttr(issueUrl(state!.host, o.dest.owner, o.dest.repo, o.dest.number))}" target="_blank">${escapeHtml(o.dest.owner)}/${escapeHtml(o.dest.repo)}#${o.dest.number}</a>`;
+      const remedy = o.stage === 'close'
+        ? 'Copy succeeded, but the source could not be closed — close it manually.'
+        : 'Note copied, but not all attachments made it — check the destination and re-attach if needed.';
+      return `<div class="move-report-row move-report-partial"><strong>${srcLink} → ${destLink}</strong><p>${escapeHtml(remedy)} (${escapeHtml(o.message)})</p></div>`;
+    }
+    if (o.status === 'failed') {
+      return `<div class="move-report-row move-report-failed"><strong>${srcLink}</strong><p>Failed at ${o.stage}: ${escapeHtml(o.message)}. Source untouched.</p></div>`;
+    }
+    return `<div class="move-report-row move-report-skipped"><strong>${srcLink}</strong><p>Not attempted — batch stopped early. Source untouched.</p></div>`;
+  }).join('');
+
+  const reportText = [header, '', ...outcomes.map(o => {
+    if (o.status === 'moved') return `MOVED    ${noteKey(o.src)} -> ${noteKey(o.dest)}`;
+    if (o.status === 'partial') return `PARTIAL(${o.stage})  ${noteKey(o.src)} -> ${noteKey(o.dest)}: ${o.message}`;
+    if (o.status === 'failed') return `FAILED(${o.stage})   ${noteKey(o.src)}: ${o.message}`;
+    return `SKIPPED  ${noteKey(o.src)}`;
+  })].join('\n');
+
+  const overlay = document.createElement('div');
+  overlay.id = 'move-report-overlay';
+  overlay.innerHTML = `
+    <div class="move-report-dialog">
+      <h3>${escapeHtml(header)}</h3>
+      <div class="move-report-rows">${rows}</div>
+      <div class="move-report-actions">
+        <button id="move-report-copy">Copy report</button>
+        <button id="move-report-close">Close</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#move-report-close')!.addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#move-report-copy')!.addEventListener('click', () => { void copyText(reportText); });
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+}
+
+async function runMove(selected: NoteSearchResult[], destOwner: string, destRepo: string): Promise<void> {
+  if (!state || selected.length === 0) return;
+
+  if (!await repoExists(state.host, state.token, destOwner, destRepo)) {
+    alert(`Repository "${destOwner}/${destRepo}" not found. Check the owner and repo name.`);
+    return;
+  }
+
+  const ar = getAttachmentsRepo();
+  let attachmentCounts: Map<string, number> | null = null;
+  if (ar) {
+    try {
+      attachmentCounts = await fetchAttachmentCounts(state.host, state.token, ar.owner, ar.repo);
+    } catch {
+      attachmentCounts = null;
+    }
+  }
+
+  const progress = showMoveProgress(selected.length);
+  const outcomes = await moveNotes(
+    selected,
+    { owner: destOwner, repo: destRepo },
+    attachmentCounts,
+    (i, _total, msg) => progress.update(i, msg),
+    () => progress.stopRequested(),
+  );
+  progress.close();
+
+  for (const outcome of outcomes) {
+    if (outcome.status === 'moved' || outcome.status === 'partial') overlayAdd(outcome.dest);
+    if (outcome.status === 'moved') overlayRemove(outcome.src);
+  }
+
+  showMoveReport(outcomes, { owner: destOwner, repo: destRepo });
+  void showNoteList();
 }
 
 async function openNote(owner: string, repo: string, number: number): Promise<void> {
@@ -1175,7 +1569,7 @@ function makeSaveCallback(getBuf: () => NoteBuffer | null): () => Promise<void> 
         const created = await createNote(state.host, state.token, newNoteTarget.owner, newNoteTarget.repo, title, body);
         logInfo(`Note: Created new note: #${created.number}`);
         const noteResult = { ...created, owner: newNoteTarget.owner, repo: newNoteTarget.repo };
-        justCreatedNote = noteResult;
+        overlayAdd(noteResult);
         newNoteTarget = null;
 
         const key = `${noteResult.owner}/${noteResult.repo}/${noteResult.number}`;
@@ -2181,6 +2575,19 @@ function moveAttachmentSelection(delta: number): void {
   if (listEl) updateAttachmentSelection(listEl);
 }
 
+/** Blob → base64, chunked to avoid blowing the call stack on String.fromCharCode
+ * for large files. */
+async function blobToBase64(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  const CHUNK = 8192;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
 async function uploadAndInsertImage(file: File): Promise<void> {
   const buf = activeBuffer();
   if (!buf || !state) return;
@@ -2190,14 +2597,7 @@ async function uploadAndInsertImage(file: File): Promise<void> {
   if (!ar) return;
 
   showStatus('Uploading screenshot...');
-  const buffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  const CHUNK = 8192;
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  const base64 = btoa(binary);
+  const base64 = await blobToBase64(file);
 
   const attachment = await uploadAttachment(
     state.host, state.token, ar.owner, ar.repo,
@@ -2266,14 +2666,7 @@ async function uploadFiles(files: File[]): Promise<void> {
       showStatus(`Uploading ${uploadedLinks.length + 1}/${files.length}...`);
       logInfo(`Attachment: Uploading ${file.name}`);
 
-      const buffer = await file.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      const CHUNK = 8192;
-      let binary = '';
-      for (let i = 0; i < bytes.length; i += CHUNK) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-      }
-      const base64 = btoa(binary);
+      const base64 = await blobToBase64(file);
 
       const attachment = await uploadAttachment(
         state!.host, state!.token, ar.owner, ar.repo,

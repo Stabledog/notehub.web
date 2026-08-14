@@ -38,9 +38,17 @@ function headers(token: string): HeadersInit {
 
 export { DEFAULT_HOST };
 
-async function apiFetch<T>(host: string, token: string, path: string, init?: RequestInit): Promise<T> {
+async function apiFetch<T>(
+  host: string, token: string, path: string, init?: RequestInit,
+  opts?: { retries?: number },
+): Promise<T> {
+  // retries = number of extra attempts after the first. Default 2 (3 attempts
+  // total, matching prior behavior). Pass 0 for non-idempotent calls (e.g. POST
+  // creating a resource) where a lost response must never trigger a duplicate.
+  const retries = opts?.retries ?? 2;
+  const maxAttempts = retries + 1;
   let lastErr: Error | undefined;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const res = await fetch(`${apiBase(host)}${path}`, {
         cache: 'no-cache',
@@ -57,7 +65,7 @@ async function apiFetch<T>(host: string, token: string, path: string, init?: Req
       lastErr = err instanceof Error ? err : new Error(String(err));
       // Only retry on network-level errors, not API errors
       if (lastErr.message.startsWith('GitHub API ')) throw lastErr;
-      if (attempt < 2) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+      if (attempt < maxAttempts - 1) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
     }
   }
   throw lastErr!;
@@ -104,7 +112,7 @@ export function getNote(host: string, token: string, owner: string, repo: string
 
 export function updateNote(
   host: string, token: string, owner: string, repo: string, number: number,
-  data: { title?: string; body?: string },
+  data: { title?: string; body?: string; state?: 'open' | 'closed' },
 ): Promise<GitHubIssue> {
   return apiFetch<GitHubIssue>(host, token, `/repos/${owner}/${repo}/issues/${number}`, {
     method: 'PATCH',
@@ -117,10 +125,12 @@ export async function createNote(
   title: string, body: string,
 ): Promise<GitHubIssue> {
   await ensureLabel(host, token, owner, repo);
+  // retries: 0 — a lost response to a successful POST must never be retried,
+  // since there is no delete-issue API to clean up the resulting duplicate.
   return apiFetch<GitHubIssue>(host, token, `/repos/${owner}/${repo}/issues`, {
     method: 'POST',
     body: JSON.stringify({ title, body, labels: ['notehub'] }),
-  });
+  }, { retries: 0 });
 }
 
 export function archiveNote(
@@ -193,7 +203,10 @@ export async function listAttachments(
       `/repos/${attachOwner}/${attachRepo}/contents/${noteOwner}/${noteRepo}/${issueNumber}`,
     );
   } catch (err) {
-    if (err instanceof Error && err.message.includes('404')) return [];
+    // Match only the status prefix ("GitHub API 404: ...") — a substring test
+    // against the whole message would misread a 500 whose body happens to
+    // mention "404" as "no attachments" and silently drop real files.
+    if (err instanceof Error && /^GitHub API 404\b/.test(err.message)) return [];
     throw err;
   }
 }

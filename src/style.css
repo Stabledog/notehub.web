@@ -196,12 +196,19 @@ body {
   background: #74c7ec;
 }
 
+.toolbar button:disabled {
+  background: #45475a;
+  color: #6c7086;
+  cursor: not-allowed;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
 }
 
-thead th:nth-child(1) { width: 100%; }
+thead th:nth-child(1) { width: 1.75rem; }
+thead th:nth-child(2) { width: 100%; }
 
 thead th {
   text-align: left;
@@ -222,7 +229,7 @@ thead th {
   white-space: nowrap;
 }
 
-.note-row td:first-child {
+.note-row td:nth-child(2) {
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -234,6 +241,15 @@ thead th {
 .note-row.selected {
   background: #313244;
   outline: 1px solid #45475a;
+}
+
+.note-select-cb {
+  cursor: pointer;
+  accent-color: #89b4fa;
+}
+
+.note-row-recent td:nth-child(2) {
+  color: #89b4fa;
 }
 
 .copy-url-btn {
@@ -977,6 +993,115 @@ thead th {
   background: var(--red);
   color: var(--base);
   border-color: var(--red);
+}
+
+/* Move dialogs */
+#move-progress-overlay,
+#move-report-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.move-progress-dialog,
+.move-report-dialog {
+  background: #1e1e2e;
+  border: 1px solid #45475a;
+  border-radius: 8px;
+  padding: 1.5rem;
+  max-width: 480px;
+  width: 90%;
+}
+
+.move-progress-dialog h3,
+.move-report-dialog h3 {
+  margin-bottom: 0.75rem;
+  color: #89b4fa;
+  font-size: 1rem;
+}
+
+.move-progress-dialog p {
+  color: #a6adc8;
+  font-size: 0.8125rem;
+}
+
+.move-progress-actions,
+.move-report-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.move-progress-actions button,
+.move-report-actions button {
+  padding: 0.4rem 1rem;
+  border-radius: 4px;
+  border: 1px solid #45475a;
+  background: #313244;
+  color: #cdd6f4;
+  cursor: pointer;
+}
+
+.move-progress-actions button:hover,
+.move-report-actions button:hover {
+  background: #45475a;
+}
+
+.move-progress-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.move-report-rows {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.move-report-row {
+  padding: 0.5rem 0.625rem;
+  border-radius: 6px;
+  background: #313244;
+  font-size: 0.8125rem;
+}
+
+.move-report-row strong {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.move-report-row a {
+  color: #89b4fa;
+}
+
+.move-report-row p {
+  color: #a6adc8;
+  font-size: 0.75rem;
+}
+
+.move-report-partial { border-left: 3px solid #f9e2af; }
+.move-report-failed { border-left: 3px solid #f38ba8; }
+.move-report-skipped { border-left: 3px solid #585b70; }
+
+.move-report-toast {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #313244;
+  border: 1px solid #a6e3a1;
+  color: #a6e3a1;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  z-index: 1000;
 }
 
 .freshness-banner {
