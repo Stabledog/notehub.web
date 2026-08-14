@@ -1180,6 +1180,31 @@ thead th {
   border-bottom: 1px solid #313244;
 }
 
+.global-search-badge {
+  flex-shrink: 0;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #11111b;
+  background: #6c7086;
+}
+
+.mode-throw .global-search-badge {
+  background: #89b4fa;
+}
+
+.mode-kick .global-search-badge {
+  background: #f9e2af;
+}
+
+.mode-throw .global-search-card,
+.mode-kick .global-search-card {
+  border-color: #45475a;
+}
+
 .global-search-input {
   flex: 1;
   background: transparent;

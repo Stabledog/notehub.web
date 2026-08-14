@@ -1685,7 +1685,56 @@ function makeBufferCallbacks(getBuf: () => NoteBuffer | null): import('./veditor
   };
 }
 
-function showGlobalSearch(): void {
+type PickerMode = 'search' | 'throw' | 'kick';
+
+const PICKER_LABELS: Record<PickerMode, { badge: string; placeholder: string; confirmHint: string }> = {
+  search: {
+    badge: '',
+    placeholder: 'Search all notes...',
+    confirmHint: '<span><kbd>Enter</kbd> Open</span><span><kbd>Ctrl+Enter</kbd> New tab</span>',
+  },
+  throw: {
+    badge: 'Throw',
+    placeholder: 'Throw a note into a new tab...',
+    confirmHint: '<span><kbd>Enter</kbd> Open in new tab</span>',
+  },
+  kick: {
+    badge: 'Kick',
+    placeholder: 'Kick current note out, load another...',
+    confirmHint: '<span><kbd>Enter</kbd> Swap</span>',
+  },
+};
+
+function noteRoute(note: { owner: string; repo: string; number: number }): Route {
+  return { screen: 'edit', owner: note.owner, repo: note.repo, number: note.number };
+}
+
+function isActiveNote(note: { owner: string; repo: string; number: number }): boolean {
+  const buf = activeBuffer();
+  return !!buf && buf.note.owner === note.owner && buf.note.repo === note.repo && buf.note.number === note.number;
+}
+
+async function throwNote(note: NoteSearchResult): Promise<void> {
+  if (isActiveNote(note)) await veditor.requestSave();
+  window.open(`${location.pathname}${buildHash(noteRoute(note))}`, '_blank');
+  showStatus(`Opened "${note.title}" in new tab`);
+}
+
+async function kickCurrentAndLoad(note: NoteSearchResult): Promise<void> {
+  const chosenRoute = noteRoute(note);
+  const selfKick = isActiveNote(note);
+  await veditor.requestSave();
+  const buf = activeBuffer();
+  const failed = !buf
+    || veditor.getEditorContent() !== buf.originalBody
+    || (titleHandle?.getValue() ?? '').trim() !== buf.originalTitle;
+  if (failed) { showStatus('Save failed — kick cancelled', true); return; }
+  window.open(`${location.pathname}${buildHash(noteRoute(buf.note))}`, '_blank');
+  if (selfKick) return; // second view of the same note — keep editing in place
+  navigate(chosenRoute);
+}
+
+function showNotePicker(mode: PickerMode = 'search'): void {
   if (document.getElementById('global-search-overlay')) return;
   if (!state) return;
 
@@ -1694,14 +1743,16 @@ function showGlobalSearch(): void {
   let gsSelectedIndex = 0;
   let gsDebounce: ReturnType<typeof setTimeout> | null = null;
   let currentMatches: SearchMatch[] = [];
+  const labels = PICKER_LABELS[mode];
 
   const overlay = document.createElement('div');
   overlay.id = 'global-search-overlay';
-  overlay.className = 'global-search-overlay';
+  overlay.className = `global-search-overlay${mode !== 'search' ? ` mode-${mode}` : ''}`;
   overlay.innerHTML = `
     <div class="global-search-card">
       <div class="global-search-header">
-        <input id="gs-input" class="global-search-input" type="text" placeholder="Search all notes..." autocomplete="off" spellcheck="false" />
+        ${labels.badge ? `<span class="global-search-badge">${labels.badge}</span>` : ''}
+        <input id="gs-input" class="global-search-input" type="text" placeholder="${labels.placeholder}" autocomplete="off" spellcheck="false" />
         <button id="gs-regex" class="search-regex-toggle" title="Toggle regex (Ctrl+R)">.*</button>
         <span id="gs-count" class="search-count"></span>
       </div>
@@ -1711,8 +1762,7 @@ function showGlobalSearch(): void {
       <div class="global-search-footer">
         <span><kbd>Tab</kbd> Results</span>
         <span><kbd>j</kbd><kbd>k</kbd> Navigate</span>
-        <span><kbd>Enter</kbd> Open</span>
-        <span><kbd>Ctrl+Enter</kbd> New tab</span>
+        ${labels.confirmHint}
         <span><kbd>Ctrl+R</kbd> Regex</span>
         <span><kbd>Esc</kbd> Close</span>
       </div>
@@ -1765,14 +1815,21 @@ function showGlobalSearch(): void {
       });
       row.addEventListener('click', (e) => {
         gsSelectedIndex = idx;
-        openSelected((e as MouseEvent).ctrlKey || (e as MouseEvent).metaKey);
+        confirmSelection((e as MouseEvent).ctrlKey || (e as MouseEvent).metaKey);
       });
     });
+  }
+
+  function showAllNotes(): void {
+    countEl.textContent = `${allNotes.length} note${allNotes.length !== 1 ? 's' : ''}`;
+    countEl.classList.remove('error');
+    renderResults(allNotes.map((note, index) => ({ note, index, context: '' })));
   }
 
   function runSearch(): void {
     const query = input.value;
     if (!query.trim()) {
+      if (mode !== 'search') { showAllNotes(); return; }
       countEl.textContent = allNotes.length > 0 ? `${allNotes.length} note${allNotes.length !== 1 ? 's' : ''}` : '';
       countEl.classList.remove('error');
       resultsEl.innerHTML = '<p class="global-search-status">Type to search…</p>';
@@ -1790,15 +1847,21 @@ function showGlobalSearch(): void {
     renderResults(matches);
   }
 
-  function openSelected(newTab: boolean): void {
+  function confirmSelection(withModifier: boolean): void {
     const m = currentMatches[gsSelectedIndex];
     if (!m) return;
     dismiss();
-    const route = { screen: 'edit' as const, owner: m.note.owner, repo: m.note.repo, number: m.note.number };
-    if (newTab) {
-      window.open(`${location.pathname}${buildHash(route)}`, '_blank');
+    if (mode === 'search') {
+      const route = { screen: 'edit' as const, owner: m.note.owner, repo: m.note.repo, number: m.note.number };
+      if (withModifier) {
+        window.open(`${location.pathname}${buildHash(route)}`, '_blank');
+      } else {
+        navigate(route);
+      }
+    } else if (mode === 'throw') {
+      void throwNote(m.note);
     } else {
-      navigate(route);
+      void kickCurrentAndLoad(m.note);
     }
   }
 
@@ -1831,7 +1894,7 @@ function showGlobalSearch(): void {
       if (gsSelectedIndex > 0) { gsSelectedIndex--; updateSelection(); }
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      openSelected(e.ctrlKey || e.metaKey);
+      confirmSelection(e.ctrlKey || e.metaKey);
     } else if (e.key === 'r' && e.ctrlKey) {
       e.preventDefault();
       gsRegexMode = !gsRegexMode;
@@ -1855,6 +1918,8 @@ function showGlobalSearch(): void {
       allNotes = notes;
       if (input.value.trim()) {
         runSearch();
+      } else if (mode !== 'search') {
+        showAllNotes();
       } else {
         countEl.textContent = `${notes.length} note${notes.length !== 1 ? 's' : ''}`;
         resultsEl.innerHTML = '<p class="global-search-status">Type to search…</p>';
@@ -1930,7 +1995,13 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
       'gt': () => titleHandle!.focus(),
       'ga': () => toggleAttachmentPanel(),
       'gS': () => handleScreenCapture(),
-      'gs': () => showGlobalSearch(),
+      'gs': () => showNotePicker('search'),
+      'gT': () => showNotePicker('throw'),
+      'gk': () => showNotePicker('kick'),
+    },
+    exCommands: {
+      throw: () => showNotePicker('throw'),
+      kick: () => showNotePicker('kick'),
     },
     helpSections: [
       {
@@ -1940,6 +2011,8 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
           ['ga', 'Toggle attachment panel'],
           ['gS', 'Screen capture'],
           ['gs', 'Search all notes'],
+          ['gT', 'Throw a note into a new tab (:throw)'],
+          ['gk', 'Kick current note to a new tab, load another (:kick)'],
         ],
       },
       {
