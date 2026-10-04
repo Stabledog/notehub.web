@@ -42,6 +42,7 @@ export function createEditor(
 ): unknown;
 
 export function insertAtCursor(text: string): void;
+export function insertLineBelowCursor(text: string): void;
 export function getEditorContent(): string;
 export function setEditorContent(content: string, opts?: { bufferId?: string }): void;
 export function isEditorDirty(original: string): boolean;

@@ -1930,8 +1930,26 @@ function showNotePicker(mode: PickerMode = 'search'): void {
     });
 }
 
-function renderEditor(title: string, body: string, buf: NoteBuffer | null): void {
-  cleanupListKeys?.();
+const MD_LINK_RE = /\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
+const URL_RE = /https?:\/\/[^\s<>"')\]]+/g;
+
+/** Strip [title](url) decoration, leaving the bare URLs behind. */
+function stripLinkDecoration(text: string): string {
+  return text.replace(MD_LINK_RE, '$2');
+}
+
+/** All bare URLs in the text, in order, deduplicated. */
+function extractUrls(text: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const m of stripLinkDecoration(text).matchAll(URL_RE)) {
+    const url = m[0].replace(/[.,;:!?)]+$/, '');
+    if (url && !seen.has(url)) { seen.add(url); out.push(url); }
+  }
+  return out;
+}
+
+function renderEditor(title: string, body: string, buf: NoteBuffer | null): void {  cleanupListKeys?.();
   cleanupListKeys = null;
 
   const note = buf?.note ?? null;
@@ -2044,6 +2062,28 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
       }
     }
   });
+
+  // Intercept URL drops (e.g. dragged from the browser address bar): insert
+  // each bare URL on its own new line below the cursor's line. The drop text
+  // is regex-scanned for URLs rather than trusted as-is, so any
+  // [title](url) decoration applied outside our code is stripped. Only
+  // claimed when the drop carries nothing but URLs — anything else falls
+  // through to the default handler.
+  document.getElementById('editor-container')!.addEventListener('drop', (e: DragEvent) => {
+    const dt = e.dataTransfer;
+    if (!dt || dt.files.length > 0) return;  // attachment flow owns file drops
+    const text = dt.getData('text/uri-list') || dt.getData('text/plain');
+    if (!text) return;
+    const urls = extractUrls(text);
+    if (urls.length === 0) return;
+    if (stripLinkDecoration(text).replace(URL_RE, '').trim() !== '') return;
+    // The deployed veditor bundle may predate insertLineBelowCursor; fall
+    // through to CodeMirror's default drop when it's unavailable.
+    if (typeof veditor.insertLineBelowCursor !== 'function') return;
+    e.preventDefault();
+    e.stopPropagation();
+    for (const url of urls) veditor.insertLineBelowCursor(url);
+  }, { capture: true });
 
   // Auto-open attachment panel if the note already has attachments
   if (note) {
