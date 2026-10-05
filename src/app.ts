@@ -2072,8 +2072,13 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
   document.getElementById('editor-container')!.addEventListener('drop', (e: DragEvent) => {
     const dt = e.dataTransfer;
     if (!dt || dt.files.length > 0) return;  // attachment flow owns file drops
-    const text = dt.getData('text/uri-list') || dt.getData('text/plain');
+    let text = dt.getData('text/uri-list') || dt.getData('text/plain');
     if (!text) return;
+    // Windows drag sources (Edge, shell) may deliver the .url file format
+    // ("[InternetShortcut]\nURL=<url>") instead of a bare URL — normalize it
+    // before the nothing-but-URLs claim check below.
+    const shortcut = text.match(/^\s*\[InternetShortcut\]\s*\r?\nURL=(\S+)\s*$/i);
+    if (shortcut) text = shortcut[1];
     const urls = extractUrls(text);
     if (urls.length === 0) return;
     if (stripLinkDecoration(text).replace(URL_RE, '').trim() !== '') return;
