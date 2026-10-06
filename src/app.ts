@@ -2071,7 +2071,11 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
   // through to the default handler.
   document.getElementById('editor-container')!.addEventListener('drop', (e: DragEvent) => {
     const dt = e.dataTransfer;
-    if (!dt || dt.files.length > 0) return;  // attachment flow owns file drops
+    if (!dt) return;
+    // NOTE: do not bail when dt.files is non-empty. Edge/Windows presents an
+    // address-bar URL drag as a .url *file*; the text flavors still carry the
+    // URL, and the claim checks below are the decider. Pure file drops carry
+    // no URL text and fall through to the attachment flow exactly as before.
     let text = dt.getData('text/uri-list') || dt.getData('text/plain');
     if (!text) return;
     // Windows drag sources (Edge, shell) may deliver the .url file format
