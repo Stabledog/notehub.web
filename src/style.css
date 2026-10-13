@@ -450,6 +450,10 @@ thead th {
 #editor-container {
   flex: 1;
   overflow: hidden;
+  /* Positioning context for veditor's absolutely positioned .veditor-mode-toggle,
+     so it anchors to the editor rather than the viewport and stays clear of the
+     attachment panel below it. */
+  position: relative;
 }
 
 .error {
@@ -673,6 +677,15 @@ thead th {
   font-size: 0.8125rem;
   font-weight: 600;
   color: #cdd6f4;
+}
+
+/* Copy of #version-badge shown in the header while the panel is open */
+.attachment-panel-version {
+  margin-left: auto;
+  margin-right: 0.5rem;
+  font-size: 10px;
+  color: #6c7086;
+  white-space: nowrap;
 }
 
 .attachment-close-btn {
@@ -1145,6 +1158,12 @@ thead th {
   background: rgba(0, 0, 0, 0.65);
   padding: 2px 6px;
   border-radius: 4px;
+}
+
+/* The fixed badge would cover the attachment panel footer; the panel header
+   shows a copy instead (see openAttachmentPanel). */
+body:has(#attachment-panel) > #version-badge {
+  display: none;
 }
 
 /* Global search overlay (gs from editor) */

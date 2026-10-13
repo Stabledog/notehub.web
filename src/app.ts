@@ -2227,6 +2227,7 @@ async function openAttachmentPanel(prefetchedAttachments?: Attachment[], opts?: 
         ${paperclipIcon} Attachments
         ${repoLink ? `<a href="${repoLink}" target="_blank" class="attachment-repo-link" title="Open attachments folder on GitHub">\u2197</a>` : ''}
       </span>
+      <span id="attachment-panel-version" class="attachment-panel-version"></span>
       <button id="attachment-close-btn" class="attachment-close-btn" title="Close (Esc)">\u2715</button>
     </div>
     <div id="attachment-list" class="attachment-list"><p class="attachment-loading">Loading...</p></div>
@@ -2242,6 +2243,20 @@ async function openAttachmentPanel(prefetchedAttachments?: Attachment[], opts?: 
       <span class="footer-action" data-action="close"><kbd>Esc</kbd> Close</span>
     </div>
   `;
+
+  // The fixed #version-badge would sit on top of the panel footer, so CSS hides
+  // it while the panel exists (body:has(#attachment-panel)) and the header shows
+  // a copy. Copied, not moved: #version-badge stays the single source of the text
+  // (main.ts + the veditor suffix in init()), and nothing has to put it back on
+  // the many paths that remove the panel.
+  const srcBadge = document.getElementById('version-badge');
+  const panelBadge = panel.querySelector<HTMLElement>('#attachment-panel-version')!;
+  if (srcBadge) {
+    panelBadge.textContent = srcBadge.textContent;
+    panelBadge.title = srcBadge.title;
+  } else {
+    panelBadge.remove();
+  }
 
   editorScreen.appendChild(panel);
   updateViewToggleChip();
