@@ -1963,6 +1963,7 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
         ${note ? `<button id="copy-note-url" class="copy-url-btn" title="Copy URL">${clipboardIcon}</button>` : ''}
         ${note ? `<button id="attachment-toggle-btn" class="attachment-toggle-btn" title="Attachments (ga)">${paperclipIcon}</button>` : ''}
         ${note ? `<button id="screen-capture-btn" class="screen-capture-btn" title="Screen capture (gS)">${cameraIcon}</button>` : ''}
+        <button id="icon-insert-btn" class="icon-insert-btn" title="Insert icon (Ctrl+.)">${smileIcon}</button>
         ${note ? `<button id="delete-note-btn" class="delete-note-btn" title="Delete note">${xIcon}</button>` : ''}
         <span id="status-msg"></span>
       </header>
@@ -1989,6 +1990,10 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
   document.getElementById('attachment-toggle-btn')?.addEventListener('click', () => toggleAttachmentPanel());
   document.getElementById('screen-capture-btn')?.addEventListener('click', () => handleScreenCapture());
   document.getElementById('delete-note-btn')?.addEventListener('click', () => handleDelete());
+  document.getElementById('icon-insert-btn')!.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showIconPalette();
+  });
 
   titleHandle = veditor.createVimInput(
     document.getElementById('note-title-container')!,
@@ -2020,6 +2025,7 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
     exCommands: {
       throw: () => showNotePicker('throw'),
       kick: () => showNotePicker('kick'),
+      icon: () => showIconPalette(),
     },
     helpSections: [
       {
@@ -2031,6 +2037,12 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
           ['gs', 'Search all notes'],
           ['gT', 'Throw a note into a new tab (:throw)'],
           ['gk', 'Kick current note to a new tab, load another (:kick)'],
+        ],
+      },
+      {
+        title: 'notehub — Any mode',
+        entries: [
+          ['Ctrl+.', 'Insert icon palette (:icon) — 1-9/0 picks, Esc cancels'],
         ],
       },
       {
@@ -2062,6 +2074,15 @@ function renderEditor(title: string, body: string, buf: NoteBuffer | null): void
       }
     }
   });
+
+  // Ctrl+. opens the icon palette from either vim mode (cf. Windows' Win+.).
+  document.getElementById('editor-container')!.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === '.' && e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      showIconPalette();
+    }
+  }, { capture: true });
 
   // Intercept URL drops (e.g. dragged from the browser address bar): insert
   // each bare URL on its own new line below the cursor's line. The drop text
@@ -3012,6 +3033,7 @@ const checkIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" s
 const xIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 const externalIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
 const cameraIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>';
+const smileIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>';
 
 function copyText(text: string): Promise<void> {
   if (inBarouse) {
@@ -3074,6 +3096,73 @@ function showCopyMenu(btn: HTMLElement, nhUrl: string, ghUrl: string): void {
       });
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Icon Palette
+// ---------------------------------------------------------------------------
+
+// Hardcoded on purpose (issue #3): a short list beats a full emoji catalogue.
+// Order matters — position N is picked with digit key N (10th is 0).
+const INSERT_ICONS = ['🎫', '🚀', '➡️', '✅', '❌', '⚠️', '❓', '💡', '📌', '⭐'];
+
+function showIconPalette(): void {
+  document.querySelector('.icon-palette')?.remove();
+  const btn = document.getElementById('icon-insert-btn');
+  if (!btn) return;
+
+  const rect = btn.getBoundingClientRect();
+  const palette = document.createElement('div');
+  palette.className = 'note-context-menu icon-palette';
+  palette.tabIndex = -1;
+  palette.innerHTML = INSERT_ICONS.map((icon, i) =>
+    `<button class="icon-palette-btn" data-index="${i}" tabindex="-1">` +
+    `<span class="icon-palette-key">${(i + 1) % 10}</span>${icon}</button>`,
+  ).join('');
+  palette.style.top = `${rect.bottom + 4}px`;
+  palette.style.left = `${rect.right}px`;
+  document.body.appendChild(palette);
+
+  const buttons = Array.from(palette.querySelectorAll<HTMLElement>('.icon-palette-btn'));
+  let selected = 0;
+  const select = (i: number) => {
+    selected = (i + buttons.length) % buttons.length;
+    buttons.forEach((b, j) => b.classList.toggle('selected', j === selected));
+  };
+
+  const close = (icon?: string) => {
+    palette.remove();
+    document.removeEventListener('click', onOutsideClick);
+    veditor.focusEditor();
+    if (icon) veditor.insertAtCursor(icon);
+  };
+  const onOutsideClick = (e: MouseEvent) => {
+    if (!palette.contains(e.target as Node)) close();
+  };
+  setTimeout(() => document.addEventListener('click', onOutsideClick), 0);
+
+  buttons.forEach((b, i) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    close(INSERT_ICONS[i]);
+  }));
+
+  palette.addEventListener('keydown', (e: KeyboardEvent) => {
+    e.stopPropagation();
+    if (/^[0-9]$/.test(e.key)) {
+      const i = (Number(e.key) + 9) % 10;
+      if (i < INSERT_ICONS.length) { e.preventDefault(); close(INSERT_ICONS[i]); }
+      return;
+    }
+    switch (e.key) {
+      case 'Escape': e.preventDefault(); close(); break;
+      case 'Enter': e.preventDefault(); close(INSERT_ICONS[selected]); break;
+      case 'ArrowRight': case 'l': case 'Tab': e.preventDefault(); select(selected + 1); break;
+      case 'ArrowLeft': case 'h': e.preventDefault(); select(selected - 1); break;
+    }
+  });
+
+  select(0);
+  palette.focus();
 }
 
 function hashTarget(url: string): string {

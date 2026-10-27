@@ -630,6 +630,49 @@ thead th {
 }
 
 /* ---------------------------------------------------------------------------
+   Icon Palette
+   --------------------------------------------------------------------------- */
+
+.icon-insert-btn {
+  padding: 0.25rem 0.4rem;
+  display: flex;
+  align-items: center;
+}
+
+.icon-palette {
+  display: flex;
+  gap: 0.125rem;
+  outline: none;
+}
+
+.icon-palette-btn {
+  position: relative;
+  padding: 0.5rem 0.4rem 0.25rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.icon-palette-btn:hover {
+  background: #45475a;
+}
+
+.icon-palette-btn.selected {
+  border-color: #89b4fa;
+}
+
+.icon-palette-key {
+  position: absolute;
+  top: 1px;
+  left: 3px;
+  font-size: 0.625rem;
+  color: #a6adc8;
+}
+
+/* ---------------------------------------------------------------------------
    Attachment Panel
    --------------------------------------------------------------------------- */
 

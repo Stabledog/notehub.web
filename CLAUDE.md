@@ -65,6 +65,10 @@ Selection state (`selectedAttachmentIndex`, `multiSelectedAttachments`) is share
 
 Right-clicking a row/tile opens a context menu (appended to `<body>`, fixed-positioned so the panel's overflow can't clip it) with **Copy link** and **Open in GitHub**; `y` does the same copy from the keyboard. The link is the file's blob page (`https://{host}/{owner}/{repo}/blob/main/{path}`). Because the attachments repo is private, that URL resolves only in a browser authenticated to the repo — it is not a public share link (same property as the inline-image `raw` URLs above).
 
+## Icon palette (editor)
+
+`Ctrl+.` (either vim mode), the `:icon` ex command, or the smiley header button opens a small popup of hardcoded icons (`INSERT_ICONS` in `app.ts`, kept deliberately short — issue #3). Digit keys `1`–`9`/`0` insert by position; `h`/`l`/arrows + `Enter` also work; `Esc` cancels. Insertion goes through `veditor.insertAtCursor` and focus returns to the body editor, so insert mode is preserved. To change the set, edit the array — order defines the digit keys.
+
 ## Git & Remote
 
 - Main branch: `main`
